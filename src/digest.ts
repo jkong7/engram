@@ -120,7 +120,12 @@ export function buildDigest(db: DB, opts: DigestOptions): Digest {
   }
   if (truncated) body += `\n(${truncated} more memories not shown to save context; use memory_search.)\n`;
   const text = `<engram-memory scope="${scope}">\n${HEADER}\n${body}</engram-memory>`;
-  if (opts.record !== false && ids.length) recordInjection(db, opts.sessionKey ?? null, ids, opts.via || 'digest');
+  if (opts.record !== false && ids.length) {
+    const partial = ids.filter((id) => text.includes(`(more: memory_get ${id})`) || procedures.some((m) => m.id === id));
+    const full = ids.filter((id) => !partial.includes(id));
+    recordInjection(db, opts.sessionKey ?? null, full, opts.via || 'digest');
+    recordInjection(db, opts.sessionKey ?? null, partial, 'digest-partial');
+  }
   return { text, ids, tokens: estimateTokens(text), truncated };
 }
 

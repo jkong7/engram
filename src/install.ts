@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync, readlinkSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync, readlinkSync, rmSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,7 +11,20 @@ import { nowIso } from './util.ts';
 
 const HOME = homedir();
 const BIN = resolve(import.meta.dirname, '..', 'bin', 'engram.js');
-const NODE = process.execPath;
+function stableNode(): string {
+  const real = realpathSync(process.execPath);
+  const dirs = [...(process.env.PATH || '').split(':'), '/opt/homebrew/bin', '/usr/local/bin'];
+  for (const d of dirs) {
+    if (!d) continue;
+    const p = join(d, 'node');
+    try {
+      if (existsSync(p) && realpathSync(p) === real && !p.includes('/Cellar/')) return p;
+    } catch {}
+  }
+  return process.execPath;
+}
+
+const NODE = stableNode();
 
 function q(s: string): string {
   return /^[\w./:@-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -448,7 +461,11 @@ function installLaunchd(o: Opts): void {
   }
   spawnSync('launchctl', ['bootout', `gui/${process.getuid!()}/${LABEL}`], { encoding: 'utf8' });
   writeFileSync(plistPath(), plist);
-  const r = spawnSync('launchctl', ['bootstrap', `gui/${process.getuid!()}`, plistPath()], { encoding: 'utf8' });
+  let r = spawnSync('launchctl', ['bootstrap', `gui/${process.getuid!()}`, plistPath()], { encoding: 'utf8' });
+  for (let i = 0; i < 10 && r.status !== 0; i++) {
+    spawnSync('sleep', ['1']);
+    r = spawnSync('launchctl', ['bootstrap', `gui/${process.getuid!()}`, plistPath()], { encoding: 'utf8' });
+  }
   console.log(r.status === 0 ? `launchd agent ${LABEL} loaded; the daemon now starts at login and restarts if it dies` : `launchctl bootstrap failed: ${r.stderr}`);
 }
 

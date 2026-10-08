@@ -120,6 +120,16 @@ describe('store without embeddings', () => {
     assert.equal(r2.ids.filter((x) => r1.ids.includes(x)).length, 0);
   });
 
+  test('items shown only as a title in the digest stay eligible for full recall', async () => {
+    const long = 'Upload only ~/Documents/ResumeInternship.pdf for internship applications and ~/Downloads/ResumeGrad.pdf for new grad roles. ' + 'Context detail. '.repeat(30);
+    const w = await writeMemory(db, { body: long, title: 'Which resume PDFs to upload', kind: 'preference', importance: 9 });
+    const d = buildDigest(db, { scope: 'global', sessionKey: 's-partial', budget: 4000 });
+    assert.ok(d.ids.includes(w.id!));
+    assert.match(d.text, new RegExp(`more: memory_get ${w.id}`));
+    const r = await buildRecall(db, 'which resume pdf do I upload for internship applications', { scope: 'global', sessionKey: 's-partial' });
+    assert.ok(r.ids.includes(w.id!), r.gate);
+  });
+
   test('kind inference', () => {
     assert.equal(inferKind('We decided to use SQLite instead of Postgres'), 'decision');
     assert.equal(inferKind('Sam prefers no em dashes in writing'), 'preference');

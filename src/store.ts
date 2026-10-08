@@ -756,7 +756,7 @@ export function recordInjection(db: DB, sessionKey: string | null, ids: string[]
   try {
     tx(db, () => {
       const st = db.prepare('update memories set injected_count = injected_count + 1, last_injected = ? where id = ?');
-      const ins = db.prepare('insert or ignore into injections(session_key, memory_id, ts, via) values (?,?,?,?)');
+      const ins = db.prepare("insert into injections(session_key, memory_id, ts, via) values (?,?,?,?) on conflict(session_key, memory_id) do update set via = case when excluded.via = 'digest-partial' then injections.via else excluded.via end, ts = excluded.ts");
       for (const id of ids) {
         st.run(now, id);
         if (sessionKey) ins.run(sessionKey, id, now, via);
@@ -767,7 +767,7 @@ export function recordInjection(db: DB, sessionKey: string | null, ids: string[]
 
 export function injectedIn(db: DB, sessionKey: string | null): Set<string> {
   if (!sessionKey) return new Set();
-  const rows = db.prepare('select memory_id from injections where session_key = ?').all(sessionKey) as { memory_id: string }[];
+  const rows = db.prepare("select memory_id from injections where session_key = ? and via != 'digest-partial'").all(sessionKey) as { memory_id: string }[];
   return new Set(rows.map((r) => r.memory_id));
 }
 

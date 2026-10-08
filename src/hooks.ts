@@ -164,7 +164,7 @@ export async function handleHook(db: DB, harnessIn: string, event: string, input
     case 'prompt': {
       if (c.prompt) addTurns(db, key, c.harness, [{ role: 'user', text: c.prompt }]);
       if (c.harness === 'cursor') return { output: { continue: true }, context: '', sessionKey: key, note: 'cursor cannot inject at prompt time' };
-      const fresh = (db.prepare("select count(*) n from injections where session_key = ? and via = 'digest'").get(key) as { n: number }).n === 0;
+      const fresh = (db.prepare("select count(*) n from injections where session_key = ? and via like 'digest%'").get(key) as { n: number }).n === 0;
       let context = '';
       let note = '';
       if (fresh && (c.harness === 'hermes' || c.harness === 'generic' || c.harness === 'opencode' || c.harness === 'gemini') && input.include_digest !== false) {
