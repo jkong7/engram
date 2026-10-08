@@ -220,7 +220,7 @@ async function cmdDaemon(a: Args): Promise<void> {
     const f = join(paths().logs, 'daemon.log');
     if (!existsSync(f)) return console.log('no logs yet');
     const lines = readFileSync(f, 'utf8').trim().split('\n');
-    return console.log(lines.slice(-(num(a.flags, 'n') || 40)).join('\n'));
+    return console.log(lines.slice(-(num(a.flags, 'lines') || Number(a._[2]) || 40)).join('\n'));
   }
   const up = await daemonUp();
   console.log(up ? `engram daemon running on http://${cfg.host}:${cfg.port} (pid ${readPid()})` : 'engram daemon not running (start with: engram daemon start)');
