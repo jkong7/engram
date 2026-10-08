@@ -115,6 +115,10 @@ export function createHttpHandler(db: DB) {
       if (!hostOk(req)) return send(res, 403, { error: 'forbidden host or origin' });
       const url = new URL(req.url || '/', 'http://localhost');
       const path = url.pathname;
+      if (path === '/favicon.ico') {
+        res.writeHead(204);
+        return void res.end();
+      }
       if (path === '/healthz') {
         return send(res, 200, { ok: true, version: '0.1.0', uptime_s: Math.round((Date.now() - startedAt) / 1000), embed_model: embedModelName(), embedder_loaded: localEmbedderLoaded(), pid: process.pid });
       }
