@@ -35,7 +35,6 @@ export function scopeForCwd(cwd: string | null | undefined): string {
   if (real !== home && real !== '/' && !real.startsWith('/private/tmp') && !real.startsWith('/tmp')) {
     const root = findRoot(real);
     if (root && root !== home) scope = 'project:' + tildify(root);
-    else if (real.startsWith(home + '/')) scope = 'project:' + tildify(real);
   }
   cache.set(cwd, scope);
   return scope;

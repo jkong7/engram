@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, statSync, unlinkSync } from 'node:fs';
 import { join, basename } from 'node:path';
+import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { DB } from './db.ts';
 import { tx, getMeta, setMeta } from './db.ts';
@@ -7,7 +8,7 @@ import { loadConfig, paths } from './config.ts';
 import { rowToMemory, logOp, getMemory, writeMemory, listMemories, type Memory, type Kind, type Trust } from './store.ts';
 import { resolveProvider, parseJsonLoose, underRateLimit, noteCall, type Provider } from './llm.ts';
 import { embedModelName } from './embed.ts';
-import { scopeLabel } from './scope.ts';
+import { scopeLabel, scopeForCwd } from './scope.ts';
 import { cosine, nowIso, daysBetween, newId, clip, contentTerms } from './util.ts';
 
 export interface DecayResult {
@@ -330,4 +331,66 @@ export async function importAll(db: DB, data: { memories: Record<string, any>[] 
 export function maintenanceDue(db: DB, key: string, everyMs: number): boolean {
   const last = getMeta(db, key);
   return !last || Date.now() - Date.parse(last) >= everyMs;
+}
+
+export function knownRepos(): Map<string, string> {
+  const out = new Map<string, string>();
+  const roots = new Set<string>();
+  for (const r of [join(homedir(), 'dev'), join(homedir(), 'projects'), join(homedir(), 'code'), join(homedir(), 'src')]) if (existsSync(r)) roots.add(r);
+  for (const root of roots) {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const dir = join(root, name);
+      if (existsSync(join(dir, '.git'))) out.set(name.toLowerCase(), scopeForCwd(dir));
+    }
+  }
+  return out;
+}
+
+export function inferScope(text: string, repos: Map<string, string>): string {
+  const found = new Set<string>();
+  const lower = text.toLowerCase();
+  for (const m of lower.matchAll(/~\/(?:dev|projects|code|src)\/([a-z0-9._-]+)/g)) {
+    const s = repos.get(m[1]);
+    if (s) found.add(s);
+  }
+  if (!found.size) {
+    for (const [name, s] of repos) {
+      if (name.length < 4) continue;
+      if (new RegExp(`(^|[^a-z0-9_-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9_-]|$)`).test(lower)) found.add(s);
+    }
+  }
+  return found.size === 1 ? [...found][0] : 'global';
+}
+
+export function rescope(db: DB, opts: { dryRun?: boolean } = {}): { moved: { id: string; from: string; to: string }[] } {
+  const repos = knownRepos();
+  const moved: { id: string; from: string; to: string }[] = [];
+  const rows = db.prepare("select * from memories where scope != 'global' and status in ('active','pending','archived')").all() as Record<string, unknown>[];
+  for (const r of rows) {
+    const m = rowToMemory(r);
+    const path = m.scope.slice(8);
+    const abs = path.startsWith('~') ? join(homedir(), path.slice(1)) : path;
+    if (scopeForCwd(abs) === m.scope) continue;
+    const to = inferScope(`${m.title}\n${m.body}`, repos);
+    if (to === m.scope) continue;
+    moved.push({ id: m.id, from: m.scope, to });
+    if (!opts.dryRun) {
+      db.prepare('update memories set scope = ?, updated_at = updated_at where id = ?').run(to, m.id);
+      logOp(db, 'rescope', m.id, m, getMemory(db, m.id), 'maintenance', `${m.scope} -> ${to}`);
+    }
+  }
+  if (!opts.dryRun) {
+    const sessions = db.prepare('select key, cwd, scope from sessions').all() as { key: string; cwd: string | null; scope: string }[];
+    for (const s of sessions) {
+      const next = scopeForCwd(s.cwd);
+      if (next !== s.scope) db.prepare('update sessions set scope = ? where key = ?').run(next, s.key);
+    }
+  }
+  return { moved };
 }

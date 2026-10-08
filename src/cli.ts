@@ -476,6 +476,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     case 'consolidate':
       return console.log(JSON.stringify(await consolidate(db, { dryRun: !!a.flags['dry-run'] }), null, 2));
+    case 'rescope': {
+      const { rescope } = await import('./maintain.ts');
+      const r = rescope(db, { dryRun: !!a.flags['dry-run'] });
+      for (const m of r.moved) console.log(`${m.id}: ${m.from} -> ${m.to}`);
+      return console.log(`${a.flags['dry-run'] ? 'would move' : 'moved'} ${r.moved.length}`);
+    }
     case 'decay':
       return console.log(JSON.stringify(decay(db, { dryRun: !!a.flags['dry-run'] }), null, 2));
     case 'mirror':

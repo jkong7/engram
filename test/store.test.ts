@@ -5,6 +5,7 @@ import { writeMemory, getMemory, updateMemory, forgetMemories, history, undoOp, 
 import { searchMemories, recallGate, searchConversations } from '../src/search.ts';
 import { buildDigest, buildRecall } from '../src/digest.ts';
 import { redactSecrets, scanInjection } from '../src/safety.ts';
+import { inferScope } from '../src/maintain.ts';
 import type { DB } from '../src/db.ts';
 
 describe('store without embeddings', () => {
@@ -145,6 +146,16 @@ describe('store without embeddings', () => {
 
   test('conversation search returns empty safely with no turns', () => {
     assert.deepEqual(searchConversations(db, 'anything at all'), []);
+  });
+});
+
+describe('scope inference', () => {
+  test('one mentioned repo wins, several or none means global', () => {
+    const repos = new Map([['notetaker', 'project:~/dev/notetaker'], ['vigil', 'project:~/dev/vigil']]);
+    assert.equal(inferScope('Notetaker deploys to Cloud Run', repos), 'project:~/dev/notetaker');
+    assert.equal(inferScope('see ~/dev/vigil/README.md', repos), 'project:~/dev/vigil');
+    assert.equal(inferScope('notetaker and vigil both use Go', repos), 'global');
+    assert.equal(inferScope('Sam likes colognes', repos), 'global');
   });
 });
 

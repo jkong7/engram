@@ -4,7 +4,7 @@ import { sessionTurns } from './capture.ts';
 import { searchMemories } from './search.ts';
 import { writeMemory, updateMemory, getMemory, listMemories, KINDS, type Memory, type Kind } from './store.ts';
 import { resolveProvider, underRateLimit, noteCall, parseJsonLoose, writeDebug, type Provider } from './llm.ts';
-import { scopeLabel } from './scope.ts';
+import { scopeLabel, normalizeScope } from './scope.ts';
 import { newId, clip, shortDate } from './util.ts';
 
 export const EXTRACT_SYSTEM = `You are the memory curator for one person's long-term memory, which is shared by every AI agent they use (Claude Code, Codex, Cursor, chat apps and more). You read one conversation between the user and an AI agent and decide what, if anything, future sessions with ANY agent should remember.
@@ -30,7 +30,7 @@ Rules:
 - Weight the user's own words above the assistant's. An assistant claim counts only if the user confirmed it or the action visibly succeeded.
 - Write declarative third-person statements about the user ("Sam prefers X because Y"), never imperatives addressed to an agent. One fact per memory. Keep bodies under 400 characters (procedures may be longer).
 - Convert relative dates ("tomorrow", "last week") into absolute dates using the session date.
-- scope is "global" when it holds across projects, "project" when it only matters for this session's project.
+- scope is "global" when it holds across projects, "project" when it only matters for this session's project, or a repo path such as "~/dev/notetaker" when it is about one specific repository other than the session's project.
 - sensitive is true for health, medication, mental health, sexuality, intimate relationships, finances, legal matters, or identity documents.
 - importance is 1 to 10 (10 = core identity or a hard rule; 3 = minor detail).
 - Compare against EXISTING MEMORIES before writing. If already covered, do nothing. If a new detail refines an existing memory, use "update" with its id and the full rewritten body. If the conversation shows an existing memory is now wrong or replaced, use "supersede" with the old id(s) and the new body. Otherwise "add".
@@ -174,7 +174,11 @@ export async function applyExtraction(db: DB, key: string, s: Record<string, any
   const batch = newId('b');
   const applied: ExtractResult['applied'] = [];
   const baseSource = { harness: s.harness as string, session: key, cwd: (s.cwd as string) || undefined };
-  const scopeFor = (x?: string) => (x === 'project' && s.scope !== 'global' ? (s.scope as string) : 'global');
+  const scopeFor = (x?: string) => {
+    if (x === 'project') return s.scope !== 'global' ? (s.scope as string) : 'global';
+    if (x && (x.startsWith('~/') || x.startsWith('/'))) return normalizeScope(x);
+    return 'global';
+  };
   for (const op of (parsed.operations || []).slice(0, 25)) {
     if (!op || !op.op || op.op === 'noop') continue;
     const kind = (KINDS as readonly string[]).includes(String(op.kind)) ? (op.kind as Kind) : undefined;

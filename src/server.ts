@@ -247,6 +247,7 @@ export async function runMaintenance(db: DB, task: string): Promise<Record<strin
   if (task === 'all' || task === 'embed') out.embedded = await backfillEmbeddings(db, 512, 'local');
   if (task === 'all' || task === 'consolidate') out.consolidate = await consolidate(db);
   if (task === 'all' || task === 'decay') out.decay = decay(db);
+  if (task === 'all' || task === 'rescope') out.rescope = (await import('./maintain.ts')).rescope(db).moved.length;
   if (task === 'all' || task === 'mirror') out.mirror = writeMirror(db);
   if (task === 'all' || task === 'backup') out.backup = backup(db);
   return out;
