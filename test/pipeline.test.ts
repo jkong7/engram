@@ -512,3 +512,18 @@ describe('access control', () => {
     assert.ok(codes.includes(429), codes.join(','));
   });
 });
+
+describe('mirror privacy', () => {
+  test('sensitive memories stay out of the git-tracked mirror', async () => {
+    const h = freshHome(false);
+    await writeMemory(h.db, { body: 'Sam takes an antidepressant daily.', kind: 'profile', sensitive: true });
+    await writeMemory(h.db, { body: 'Sam likes pickleball.', kind: 'profile' });
+    const { writeMirror } = await import('../src/maintain.ts');
+    const r = writeMirror(h.db, { commit: true });
+    const tracked = spawnSync('git', ['ls-files'], { cwd: r.dir, encoding: 'utf8' }).stdout;
+    assert.ok(!/_sensitive/.test(tracked));
+    assert.ok(!readFileSync(join(r.dir, 'MEMORY.md'), 'utf8').includes('antidepressant'));
+    assert.match(readFileSync(join(r.dir, '.gitignore'), 'utf8'), /_sensitive/);
+    h.cleanup();
+  });
+});

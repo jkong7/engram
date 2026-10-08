@@ -202,7 +202,7 @@ export function writeMirror(db: DB, opts: { commit?: boolean } = {}): { files: n
   const ms = listMemories(db, { status: ['active', 'pending'], limit: 100000, order: 'importance' });
   const keep = new Set<string>();
   for (const m of ms) {
-    const sub = join(dir, m.status === 'pending' ? 'pending' : m.kind);
+    const sub = m.sensitive ? join(dir, '_sensitive') : join(dir, m.status === 'pending' ? 'pending' : m.kind);
     mkdirSync(sub, { recursive: true });
     const file = join(sub, `${m.id}.md`);
     keep.add(file);
@@ -217,7 +217,8 @@ export function writeMirror(db: DB, opts: { commit?: boolean } = {}): { files: n
     }
   }
   const groups = new Map<string, Memory[]>();
-  for (const m of ms.filter((x) => x.status === 'active')) groups.set(m.kind, [...(groups.get(m.kind) || []), m]);
+  writeFileSync(join(dir, '.gitignore'), '_sensitive/\n');
+  for (const m of ms.filter((x) => x.status === 'active' && !x.sensitive)) groups.set(m.kind, [...(groups.get(m.kind) || []), m]);
   let index = `# engram memory\n\nGenerated ${nowIso()} from ${cfg.dbPath}. Read-only mirror; edit with the engram CLI or web UI.\n`;
   for (const [kind, list] of groups) {
     index += `\n## ${kind} (${list.length})\n`;
