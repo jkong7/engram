@@ -194,6 +194,28 @@ const MIGRATIONS: string[] = [
     update meta set v = cast(v as integer) + 1 where k = 'vec_version';
   end;
   `,
+  `
+  alter table memories add column vec_seq integer not null default 0;
+  create index memories_vec_seq on memories(vec_seq);
+  insert or ignore into meta(k, v) values ('vec_deletes', '0');
+  drop trigger memories_vec_ai;
+  drop trigger memories_vec_ad;
+  drop trigger memories_vec_au;
+  create trigger memories_vec_ai after insert on memories begin
+    update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+    update memories set vec_seq = (select cast(v as integer) from meta where k = 'vec_version') where rid = new.rid;
+  end;
+  create trigger memories_vec_ad after delete on memories begin
+    update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+    update meta set v = cast(v as integer) + 1 where k = 'vec_deletes';
+  end;
+  create trigger memories_vec_au after update of body, title, status, scope, kind, embedding, embed_model, sensitive, trust, flags on memories begin
+    update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+    update memories set vec_seq = (select cast(v as integer) from meta where k = 'vec_version') where rid = new.rid;
+  end;
+  update memories set vec_seq = 1;
+  update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+  `,
 ];
 
 const opened = new Map<string, DB>();

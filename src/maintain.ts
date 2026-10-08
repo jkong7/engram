@@ -381,7 +381,7 @@ export function rescope(db: DB, opts: { dryRun?: boolean } = {}): { moved: { id:
     if (to === m.scope) continue;
     moved.push({ id: m.id, from: m.scope, to });
     if (!opts.dryRun) {
-      db.prepare('update memories set scope = ?, updated_at = updated_at where id = ?').run(to, m.id);
+      db.prepare('update memories set scope = ?, updated_at = ? where id = ?').run(to, nowIso(), m.id);
       logOp(db, 'rescope', m.id, m, getMemory(db, m.id), 'maintenance', `${m.scope} -> ${to}`);
     }
   }

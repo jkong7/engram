@@ -40,21 +40,47 @@ export interface VecEntry {
   vec: Float32Array;
 }
 
-const vecCache = new Map<string, { sig: string; entries: VecEntry[] }>();
+interface VecCache {
+  version: number;
+  deletes: string;
+  model: string;
+  byId: Map<string, VecEntry>;
+  list: VecEntry[];
+}
+
+const vecCache = new Map<string, VecCache>();
 
 export function vectorIndex(db: DB): VecEntry[] {
   const model = embedModelName();
-  const row = db.prepare("select v from meta where k = 'vec_version'").get() as { v: string } | undefined;
+  const metaRows = db.prepare("select k, v from meta where k in ('vec_version', 'vec_deletes')").all() as { k: string; v: string }[];
+  const version = Number(metaRows.find((r) => r.k === 'vec_version')?.v ?? -1);
+  const deletes = metaRows.find((r) => r.k === 'vec_deletes')?.v ?? 'x';
   const key = db.location() ?? 'mem';
-  const sigStr = `${row?.v ?? 'x'}|${model}`;
   const hit = vecCache.get(key);
-  if (hit && hit.sig === sigStr && row) return hit.entries;
-  const rows = db
-    .prepare(`select rid, id, kind, scope, status, embedding from memories where embedding is not null and embed_model = ? and status != 'deleted'`)
-    .all(model) as { rid: number; id: string; kind: string; scope: string; status: string; embedding: Uint8Array }[];
-  const entries = rows.map((r) => ({ id: r.id, rid: r.rid, kind: r.kind, scope: r.scope, status: r.status, vec: fromBlob(r.embedding)! }));
-  vecCache.set(key, { sig: sigStr, entries });
-  return entries;
+  const toEntry = (r: { rid: number; id: string; kind: string; scope: string; status: string; embedding: Uint8Array | null; embed_model: string | null }) =>
+    r.embedding && r.embed_model === model && r.status !== 'deleted' ? { id: r.id, rid: r.rid, kind: r.kind, scope: r.scope, status: r.status, vec: fromBlob(r.embedding)! } : null;
+  if (hit && hit.model === model && hit.deletes === deletes && version >= 0) {
+    if (hit.version === version) return hit.list;
+    const changed = db.prepare('select rid, id, kind, scope, status, embedding, embed_model from memories where vec_seq > ?').all(hit.version) as never[];
+    for (const r of changed) {
+      const e = toEntry(r);
+      const id = (r as { id: string }).id;
+      if (e) hit.byId.set(id, e);
+      else hit.byId.delete(id);
+    }
+    hit.version = version;
+    hit.list = [...hit.byId.values()];
+    return hit.list;
+  }
+  const rows = db.prepare(`select rid, id, kind, scope, status, embedding, embed_model from memories where embedding is not null and status != 'deleted'`).all() as never[];
+  const byId = new Map<string, VecEntry>();
+  for (const r of rows) {
+    const e = toEntry(r);
+    if (e) byId.set(e.id, e);
+  }
+  const fresh = { version, deletes, model, byId, list: [...byId.values()] };
+  vecCache.set(key, fresh);
+  return fresh.list;
 }
 
 function vectorEntries(db: DB, statuses: Status[]): VecEntry[] {
@@ -100,13 +126,15 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
   const fq = ftsQuery(opts.query);
   if (fq) {
     try {
-      const res = db
-        .prepare(
-          `select m.* from memories_fts f join memories m on m.rid = f.rowid
-           where memories_fts match ? and m.status in (${statuses.map(() => '?').join(',')})
-           order by bm25(memories_fts, 3.0, 1.0, 2.0) limit 80`,
-        )
-        .all(fq, ...statuses) as Record<string, unknown>[];
+      const ids = db.prepare(`select rowid r from memories_fts where memories_fts match ? order by bm25(memories_fts, 3.0, 1.0, 2.0) limit 120`).all(fq) as { r: number }[];
+      const order = new Map(ids.map((x, i) => [x.r, i]));
+      const res = ids.length
+        ? (db
+            .prepare(`select * from memories where rid in (${ids.map(() => '?').join(',')}) and status in (${statuses.map(() => '?').join(',')})`)
+            .all(...ids.map((x) => x.r), ...statuses) as Record<string, unknown>[])
+        : [];
+      res.sort((a, b) => order.get(a.rid as number)! - order.get(b.rid as number)!);
+      res.splice(50);
       res.forEach((r, i) => {
         const m = rowToMemory(r);
         rows.set(m.id, m);
@@ -127,11 +155,11 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
     const entries = vectorEntries(db, statuses);
     const scored = entries.map((e) => ({ e, c: cosine(qvec!, e.vec) }));
     scored.sort((a, b) => b.c - a.c);
-    scored.slice(0, 80).forEach((s, i) => {
+    scored.slice(0, 50).forEach((s, i) => {
       ranksVec.set(s.e.id, i + 1);
       cosById.set(s.e.id, s.c);
     });
-    const missing = scored.slice(0, 80).filter((s) => !rows.has(s.e.id)).map((s) => s.e.rid);
+    const missing = scored.slice(0, 50).filter((s) => !rows.has(s.e.id)).map((s) => s.e.rid);
     for (let i = 0; i < missing.length; i += 200) {
       const chunk = missing.slice(i, i + 200);
       const rs = db.prepare(`select * from memories where rid in (${chunk.map(() => '?').join(',')})`).all(...chunk) as Record<string, unknown>[];
@@ -159,7 +187,9 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
   }
   const floor = opts.floor ?? (mode === 'recall' ? cfg.recallFloor : cfg.searchFloor);
   const hits: Hit[] = [];
-  for (const m of rows.values()) {
+  const prelim = (id: string) => (ranksLex.has(id) ? 1 / (60 + ranksLex.get(id)!) : 0) + (ranksVec.has(id) ? 1 / (60 + ranksVec.get(id)!) : 0) + (timeBoosted.has(id) ? 1 : 0);
+  const candidates = [...rows.values()].sort((a, b) => prelim(b.id) - prelim(a.id)).slice(0, Math.max(40, limit * 6));
+  for (const m of candidates) {
     if (opts.exclude?.has(m.id)) continue;
     if (opts.kinds?.length && !opts.kinds.includes(m.kind)) continue;
     if (!opts.includeSensitive && m.sensitive && mode === 'recall') continue;
