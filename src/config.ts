@@ -29,6 +29,7 @@ export interface EngramConfig {
   sources: { path: string; exclude?: string[] }[];
   retention: { turnsDays: number; deletedDays: number };
   telemetry?: { enabled?: boolean; endpoint?: string; headers?: Record<string, string>; captureContent?: boolean; serviceName?: string };
+  user: { name: string };
 }
 
 export function engramHome(): string {
@@ -59,6 +60,7 @@ function defaults(home: string): EngramConfig {
     remote: { enabled: false, port: 7433, publicUrl: '', allowWrite: true, allowForget: false },
     sources: [],
     retention: { turnsDays: 0, deletedDays: 30 },
+    user: { name: 'The user' },
   };
 }
 
