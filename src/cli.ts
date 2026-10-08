@@ -649,9 +649,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return;
     }
     case 'eval': {
-      const { runEval, runE2E } = await import('./eval.ts');
+      const { runEval, runE2E, runE2ERepeated } = await import('./eval.ts');
       if (a.flags.e2e) {
-        await runE2E({ json, provider: str(a.flags, 'provider') });
+        if (num(a.flags, 'runs')) await runE2ERepeated({ provider: str(a.flags, 'provider'), runs: num(a.flags, 'runs')! });
+        else await runE2E({ json, provider: str(a.flags, 'provider') });
         return;
       }
       await runEval({ json, verbose: !!a.flags.verbose, sweep: str(a.flags, 'sweep')?.split(',').map(Number) });

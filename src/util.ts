@@ -35,7 +35,9 @@ export function daysBetween(a: string | Date, b: string | Date = new Date()): nu
 
 export function shortDate(iso: string | null | undefined): string {
   if (!iso) return '';
-  return iso.slice(0, 10);
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export const STOPWORDS = new Set(

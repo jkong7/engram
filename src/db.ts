@@ -216,6 +216,9 @@ const MIGRATIONS: string[] = [
   update memories set vec_seq = 1;
   update meta set v = cast(v as integer) + 1 where k = 'vec_version';
   `,
+  `
+  update memories set embedding = null, embed_model = null where tags != '[]';
+  `,
 ];
 
 const opened = new Map<string, DB>();

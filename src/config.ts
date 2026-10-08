@@ -91,6 +91,7 @@ export function loadConfig(fresh = false): EngramConfig {
   cfg.home = home;
   if (process.env.ENGRAM_DB) cfg.dbPath = process.env.ENGRAM_DB;
   if (process.env.ENGRAM_EMBED === 'off') cfg.embed.enabled = false;
+  if (process.env.ENGRAM_EMBED_MODEL) cfg.embed.model = process.env.ENGRAM_EMBED_MODEL;
   if (process.env.ENGRAM_LLM) cfg.llm.provider = process.env.ENGRAM_LLM as LlmProviderName;
   if (process.env.ENGRAM_PORT) cfg.port = Number(process.env.ENGRAM_PORT);
   if (process.env.ENGRAM_HOST) cfg.host = process.env.ENGRAM_HOST;

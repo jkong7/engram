@@ -4,7 +4,7 @@ import { loadConfig } from './config.ts';
 import { redactSecrets, scanInjection, looksSensitive } from './safety.ts';
 import { normalizeScope } from './scope.ts';
 import { embedOne, embedModelName, type EmbedMode } from './embed.ts';
-import { newId, nowIso, sha, normalize, clip, safeJson, cosine, toBlob, fromBlob, contentTerms, ftsQuery } from './util.ts';
+import { newId, nowIso, sha, normalize, clip, safeJson, cosine, toBlob, fromBlob, contentTerms, ftsQuery, shortDate } from './util.ts';
 import { vectorIndex } from './search.ts';
 
 export const KINDS = ['profile', 'preference', 'fact', 'decision', 'procedure', 'episode', 'reference'] as const;
@@ -145,8 +145,8 @@ export function publicMemory(m: Memory, opts: { full?: boolean } = {}) {
     importance: m.importance,
     trust: m.trust,
     status: m.status,
-    created: m.created_at.slice(0, 10),
-    updated: m.updated_at.slice(0, 10),
+    created: shortDate(m.created_at),
+    updated: shortDate(m.updated_at),
   };
   if (m.pinned) out.pinned = true;
   if (m.sensitive) out.sensitive = true;
@@ -294,6 +294,10 @@ function findNearDuplicate(db: DB, kind: Kind, scope: string, title: string, bod
   return best;
 }
 
+export function embedText(title: string, body: string, tags: string[] = []): string {
+  return tags.length ? `${title}\n${body}\nTopics: ${tags.join(', ')}` : `${title}\n${body}`;
+}
+
 export function memoryHash(kind: string, scope: string, body: string): string {
   return sha(`${kind}|${scope}|${normalize(body)}`);
 }
@@ -322,7 +326,7 @@ export async function writeMemory(db: DB, input: WriteInput): Promise<WriteResul
   const injection = scanInjection(title + '\n' + body);
   if (injection.length) flags.push(...injection.map((x) => 'injection:' + x));
   if (red.redactions.length) flags.push('redacted');
-  const sensitive = input.sensitive ?? looksSensitive(body);
+  const sensitive = trust === 'user' && input.sensitive !== undefined ? input.sensitive : !!input.sensitive || looksSensitive(title + '\n' + body);
   const hash = memoryHash(kind, scope, body);
   const now = nowIso();
   const actor = input.actor || input.source?.harness || trust;
@@ -347,7 +351,7 @@ export async function writeMemory(db: DB, input: WriteInput): Promise<WriteResul
 
   let vec: Float32Array | null = null;
   try {
-    vec = await embedOne(`${title}\n${body}`, input.embedMode);
+    vec = await embedOne(embedText(title, body, tags), input.embedMode);
   } catch {
     vec = null;
   }
@@ -556,9 +560,9 @@ export async function updateMemory(db: DB, id: string, patch: UpdatePatch, actor
   const scope = patch.scope ? normalizeScope(patch.scope, cwd) : before.scope;
   let vec = before.embedding;
   let model = before.embed_model;
-  if (body !== before.body || title !== before.title) {
+  if (body !== before.body || title !== before.title || (patch.tags && patch.tags.join() !== before.tags.join())) {
     try {
-      vec = await embedOne(`${title}\n${body}`);
+      vec = await embedOne(embedText(title, body, patch.tags ?? before.tags));
       model = vec ? embedModelName() : null;
     } catch {
       vec = null;
@@ -809,10 +813,10 @@ export function stats(db: DB) {
 export async function backfillEmbeddings(db: DB, limit = 256, mode: EmbedMode = 'local'): Promise<number> {
   const { embed } = await import('./embed.ts');
   const rows = db
-    .prepare("select id, title, body from memories where status in ('active','pending','superseded','archived') and (embedding is null or embed_model is null or embed_model != ?) limit ?")
-    .all(embedModelName(), limit) as { id: string; title: string; body: string }[];
+    .prepare("select id, title, body, tags from memories where status in ('active','pending','superseded','archived') and (embedding is null or embed_model is null or embed_model != ?) limit ?")
+    .all(embedModelName(), limit) as { id: string; title: string; body: string; tags: string }[];
   if (!rows.length) return 0;
-  const vecs = await embed(rows.map((r) => `${r.title}\n${r.body}`), mode);
+  const vecs = await embed(rows.map((r) => embedText(r.title, r.body, safeJson<string[]>(r.tags, []))), mode);
   if (!vecs) return 0;
   const st = db.prepare('update memories set embedding = ?, embed_model = ? where id = ?');
   tx(db, () => {

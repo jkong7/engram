@@ -54,6 +54,7 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\b(ssri|sertraline|fluoxetine|escitalopram|lexapro|zoloft|prozac|wellbutrin|adderall|vyvanse|ritalin|antidepressant|medication|prescription|diagnos(is|ed)|therapist|therapy session|psychiatrist)\b/i,
   /\b(adhd|ocd|depression|anxiety disorder|bipolar|ptsd|autism|eating disorder|panic attacks?)\b/i,
   /\b(hiv|std|sti|pregnan(t|cy)|miscarriage|abortion)\b/i,
+  /\b(migraines?|seizures?|chronic pain|surgery|hospitali[sz]ed|chemo(therapy)?|cancer|diabetes|insulin|doctor'?s? (appointment|visit)|medical (condition|leave)|sick leave|illness|injur(y|ies))\b/i,
   /\b(social security number|ssn|passport number|bank account|routing number|credit card)\b/i,
   /\b(sexual|sex life|intimate)\b/i,
 ];

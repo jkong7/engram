@@ -73,7 +73,7 @@ export function buildDigest(db: DB, opts: DigestOptions): Digest {
   if (recentDecisions.length) sections.push({ title: 'Recent decisions', items: recentDecisions, render: (m) => line(m, 200), share: 0.1 });
   if (keyFacts.length) sections.push({ title: 'Key facts', items: keyFacts, render: (m) => line(m, 200), share: 0.12 });
   if (recentEpisodes.length)
-    sections.push({ title: 'Recent sessions here (memory_get for details)', items: recentEpisodes, render: (m) => `- ${m.updated_at.slice(0, 10)}: ${sanitizeForPrompt(m.title)} [${m.id}]`, share: 0.06 });
+    sections.push({ title: 'Recent sessions here (memory_get for details)', items: recentEpisodes, render: (m) => `- ${shortDate(m.updated_at)}: ${sanitizeForPrompt(m.title)} [${m.id}]`, share: 0.06 });
   if (procedures.length)
     sections.push({ title: 'Procedures (load with memory_get before doing these)', items: procedures, render: (m) => `- ${sanitizeForPrompt(m.title)} [${m.id}]`, share: 0.08 });
 
