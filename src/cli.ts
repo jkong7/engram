@@ -246,7 +246,8 @@ Capture and learning
   engram ingest --file PATH --harness H                         ingest one transcript
   engram ingest --stdin --harness H --session ID [--cwd D] [--end]   JSON turns on stdin
   engram extract [SESSION_KEY | --pending] [--dry-run] [--force]
-  engram consolidate | decay [--dry-run] | mirror | backup | maintain [all|scan|embed|consolidate|decay|mirror|backup]
+  engram consolidate | decay [--dry-run] | mirror | maintain [all|scan|embed|consolidate|decay|rescope|mirror|backup|retention]
+  engram backup [list | verify [FILE] | restore [FILE] --yes]
 
 Integration
   engram mcp [--read-only] [--no-forget]           MCP server on stdio
@@ -517,8 +518,27 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return console.log(JSON.stringify(decay(db, { dryRun: !!a.flags['dry-run'] }), null, 2));
     case 'mirror':
       return console.log(JSON.stringify(writeMirror(db)));
-    case 'backup':
+    case 'backup': {
+      const sub = a._[1];
+      const ops = await import('./ops.ts');
+      if (sub === 'list') {
+        for (const b of ops.listBackups()) console.log(b);
+        return;
+      }
+      if (sub === 'restore') {
+        const file = a._[2] || ops.listBackups()[0];
+        if (!file) return console.log('no backups found');
+        if (!a.flags.yes) return console.log(`Would restore ${file} over ${loadConfig().dbPath} (current file is kept as .corrupt-*). Stop the daemon first (engram daemon stop), then re-run with --yes.`);
+        closeAll();
+        const q = ops.restoreBackup(resolve(file));
+        return console.log(`restored ${file}; previous database kept at ${q}`);
+      }
+      if (sub === 'verify') {
+        const r = ops.integrityOk(a._[2] ? resolve(a._[2]) : loadConfig().dbPath);
+        return console.log(r.ok ? 'ok' : `FAILED: ${r.detail}`);
+      }
       return console.log(backup(db));
+    }
     case 'embed':
       setEmbedMode('local');
       return console.log(`embedded ${await backfillEmbeddings(db, 100000, 'local')}`);

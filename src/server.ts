@@ -21,15 +21,13 @@ import { resolveProvider } from './llm.ts';
 import { getMeta, setMeta } from './db.ts';
 import { nowIso } from './util.ts';
 import { uiHtml } from './ui.ts';
+import { writeLog, ensureHealthyDb, metricsText, count, observe, applyRetention } from './ops.ts';
 
 const startedAt = Date.now();
 
 export function log(...args: unknown[]): void {
   const line = `${nowIso()} ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`;
-  try {
-    mkdirSync(paths().logs, { recursive: true });
-    appendFileSync(join(paths().logs, 'daemon.log'), line);
-  } catch {}
+  writeLog('daemon.log', line);
   if (process.env.ENGRAM_FOREGROUND) process.stderr.write(line);
 }
 
@@ -119,6 +117,10 @@ export function createHttpHandler(db: DB) {
         res.writeHead(204);
         return void res.end();
       }
+      if (path === '/metrics') {
+        res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
+        return void res.end(metricsText(db));
+      }
       if (path === '/healthz') {
         return send(res, 200, { ok: true, version: '0.1.0', uptime_s: Math.round((Date.now() - startedAt) / 1000), embed_model: embedModelName(), embedder_loaded: localEmbedderLoaded(), pid: process.pid });
       }
@@ -138,7 +140,10 @@ export function createHttpHandler(db: DB) {
       const json = () => (body.length ? JSON.parse(body.toString('utf8')) : {});
       const hook = path.match(/^\/v1\/hooks\/([^/]+)\/([^/]+)$/);
       if (hook && req.method === 'POST') {
+        const t0 = performance.now();
         const r = await handleHook(db, decodeURIComponent(hook[1]), decodeURIComponent(hook[2]), json(), { embedMode: 'local' });
+        observe('hook', performance.now() - t0, { harness: hook[1], event: hook[2] });
+        count('hook', { harness: hook[1], event: hook[2] });
         log('hook', hook[1], hook[2], r.note);
         return send(res, 200, r.output ?? {});
       }
@@ -255,6 +260,7 @@ export async function runMaintenance(db: DB, task: string): Promise<Record<strin
   if (task === 'all' || task === 'rescope') out.rescope = (await import('./maintain.ts')).rescope(db).moved.length;
   if (task === 'all' || task === 'mirror') out.mirror = writeMirror(db);
   if (task === 'all' || task === 'backup') out.backup = backup(db);
+  if (task === 'all' || task === 'retention') out.retention = applyRetention(db);
   return out;
 }
 
@@ -310,6 +316,7 @@ async function runOneJob(db: DB): Promise<boolean> {
   try {
     if (job.kind === 'extract') {
       const r = await extractSession(db, String(job.payload.session));
+      count('extract', { status: r.status });
       log('extract', job.payload.session, r.status, r.reason || '', r.applied.map((a) => `${a.op}:${a.status}`).join(','));
       if (r.status === 'deferred') {
         if (r.reason === 'no LLM provider configured') defer(db, job, 6 * 3600000, r.reason);
@@ -333,6 +340,7 @@ async function runOneJob(db: DB): Promise<boolean> {
 
 export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: () => Promise<void>; port: number }> {
   const cfg = loadConfig();
+  if (!opts.db) ensureHealthyDb(log);
   const db = opts.db || openDb();
   const port = opts.port ?? cfg.port;
   setEmbedMode('local');

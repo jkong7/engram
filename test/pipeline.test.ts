@@ -375,3 +375,74 @@ describe('CLI and installers in an isolated HOME', () => {
     rmSync(home, { recursive: true, force: true });
   });
 });
+
+describe('operations', () => {
+  test('log rotation keeps a bounded set of files', async () => {
+    const { rotateIfNeeded } = await import('../src/ops.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'engram-log-'));
+    const f = join(dir, 'daemon.log');
+    for (let i = 0; i < 8; i++) {
+      writeFileSync(f, 'x'.repeat(5 * 1024 * 1024 + 1));
+      rotateIfNeeded(f);
+    }
+    const { readdirSync } = await import('node:fs');
+    const files = readdirSync(dir).sort();
+    assert.deepEqual(files, ['daemon.log.1', 'daemon.log.2', 'daemon.log.3', 'daemon.log.4', 'daemon.log.5']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('corrupt database is detected and restored from the latest healthy backup', async () => {
+    const h = freshHome(false);
+    await writeMemory(h.db, { body: 'Backup canary memory about tide pools.', kind: 'fact' });
+    const { backup } = await import('../src/maintain.ts');
+    const { integrityOk, ensureHealthyDb } = await import('../src/ops.ts');
+    const { closeAll, openDb } = await import('../src/db.ts');
+    const { loadConfig } = await import('../src/config.ts');
+    backup(h.db);
+    closeAll();
+    const file = loadConfig().dbPath;
+    const { openSync, writeSync, closeSync, statSync } = await import('node:fs');
+    const fd = openSync(file, 'r+');
+    const junk = Buffer.alloc(8192, 0x41);
+    writeSync(fd, junk, 0, junk.length, Math.max(4096, statSync(file).size - 8192));
+    writeSync(fd, Buffer.from('garbage header!!'), 0, 16, 0);
+    closeSync(fd);
+    assert.equal(integrityOk(file).ok, false);
+    const notes: string[] = [];
+    ensureHealthyDb((...a) => notes.push(a.join(' ')));
+    assert.ok(notes.some((n) => n.includes('restored database from backup')), notes.join('\n'));
+    const db = openDb();
+    assert.ok(listMemories(db).some((m) => m.body.includes('tide pools')));
+    h.cleanup();
+  });
+
+  test('retention trims old turns and expired tombstones', async () => {
+    const h = freshHome(false);
+    const { saveConfigPatch } = await import('../src/config.ts');
+    const { applyRetention } = await import('../src/ops.ts');
+    const { addTurns, touchSession } = await import('../src/capture.ts');
+    const key = touchSession(h.db, { harness: 'x', sessionId: 'old' });
+    addTurns(h.db, key, 'x', [{ role: 'user', text: 'ancient message here', ts: '2020-01-01T00:00:00Z' }, { role: 'user', text: 'fresh message here', ts: new Date().toISOString() }]);
+    const w = await writeMemory(h.db, { body: 'to be forgotten forever', kind: 'fact' });
+    const { forgetMemories } = await import('../src/store.ts');
+    forgetMemories(h.db, [w.id!], 'test');
+    h.db.prepare("update memories set updated_at = '2020-01-01T00:00:00Z' where id = ?").run(w.id!);
+    saveConfigPatch({ retention: { turnsDays: 365, deletedDays: 30 } });
+    const r = applyRetention(h.db);
+    assert.equal(r.turns, 1);
+    assert.equal(getMemory(h.db, w.id!), null);
+    h.cleanup();
+  });
+
+  test('metrics endpoint text is Prometheus formatted', async () => {
+    const h = freshHome(false);
+    const { metricsText, count, observe } = await import('../src/ops.ts');
+    count('hook', { harness: 'claude-code', event: 'Stop' });
+    observe('hook', 12.5, { harness: 'claude-code', event: 'Stop' });
+    const t = metricsText(h.db);
+    assert.match(t, /# TYPE engram_memories gauge/);
+    assert.match(t, /engram_events_total\{name="hook",harness="claude-code",event="Stop"\} 1/);
+    assert.match(t, /engram_latency_ms\{.*quantile="0.99"\}/);
+    h.cleanup();
+  });
+});

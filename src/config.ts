@@ -27,6 +27,7 @@ export interface EngramConfig {
   excludeCwds: string[];
   remote: { enabled: boolean; port: number; publicUrl: string; allowWrite: boolean; allowForget: boolean };
   sources: { path: string; exclude?: string[] }[];
+  retention: { turnsDays: number; deletedDays: number };
 }
 
 export function engramHome(): string {
@@ -56,6 +57,7 @@ function defaults(home: string): EngramConfig {
     excludeCwds: [join(home, 'work')],
     remote: { enabled: false, port: 7433, publicUrl: '', allowWrite: true, allowForget: false },
     sources: [],
+    retention: { turnsDays: 0, deletedDays: 30 },
   };
 }
 
