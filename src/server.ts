@@ -23,6 +23,7 @@ import { nowIso } from './util.ts';
 import { uiHtml } from './ui.ts';
 import { writeLog, ensureHealthyDb, metricsText, count, observe, applyRetention } from './ops.ts';
 import { authenticate, requiredScope, rateLimited, dbFor, createKey, listKeys, revokeKey, type Scope } from './auth.ts';
+import { Span, parseTraceparent, memoryToolSpan, traceSettings, withSpan, type Attrs } from './trace.ts';
 
 const startedAt = Date.now();
 
@@ -48,7 +49,8 @@ function cookieToken(req: IncomingMessage): string | undefined {
 function hostOk(req: IncomingMessage): boolean {
   const cfg = loadConfig();
   const host = (req.headers.host || '').toLowerCase();
-  const allowed = [`127.0.0.1:${cfg.port}`, `localhost:${cfg.port}`, `[::1]:${cfg.port}`, ...(process.env.ENGRAM_ALLOWED_HOSTS || '').split(',').filter(Boolean)];
+  const allowed = [`127.0.0.1:${cfg.port}`, `localhost:${cfg.port}`, `[::1]:${cfg.port}`, `${cfg.host}:${cfg.port}`, ...(process.env.ENGRAM_ALLOWED_HOSTS || '').split(',').filter(Boolean)];
+  if (process.env.ENGRAM_ALLOWED_HOSTS === '*') return true;
   if (!allowed.includes(host)) return false;
   const origin = req.headers.origin;
   if (origin && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(origin) && !(process.env.ENGRAM_ALLOWED_ORIGINS || '').split(',').includes(origin)) return false;
@@ -98,6 +100,58 @@ async function pipeWebResponse(res: ServerResponse, r: Response): Promise<void> 
   } finally {
     res.end();
   }
+}
+
+function requestSpan(req: IncomingMessage, path: string, body: Buffer, url: URL, tenant: string): Span | null {
+  const settings = traceSettings();
+  if (!settings) return null;
+  const method = req.method || 'GET';
+  let b: any = {};
+  if (body.length) {
+    try {
+      b = JSON.parse(body.toString('utf8'));
+    } catch {}
+  }
+  let parent = parseTraceparent(req.headers.traceparent);
+  let op: [string, string] | null = null;
+  let name = '';
+  const attrs: Attrs = { 'http.request.method': method, 'url.path': path, 'engram.tenant': tenant, 'gen_ai.memory.provider': 'engram' };
+  const sid = b.session_id ?? b.sessionId ?? url.searchParams.get('session_id');
+  if (sid) attrs['session.id'] = String(sid);
+  let query: unknown;
+  if (path === '/v1/recall' && method === 'POST') (op = ['search_memory', 'recall']), (query = b.prompt);
+  else if (path === '/v1/search' && method === 'POST') (op = ['search_memory', 'search']), (query = b.query);
+  else if (path === '/v1/context' && method === 'GET') op = ['read_memory', 'digest'];
+  else if (path === '/v1/memories' && method === 'POST') (op = ['create_memory', 'create']), (query = b.text ?? b.body);
+  else if (/^\/v1\/memories\/[^/]+$/.test(path) && method === 'PATCH') op = ['update_memory', 'update'];
+  else if (/^\/v1\/memories\/[^/]+$/.test(path) && method === 'DELETE') op = ['delete_memory', 'delete'];
+  else if (path === '/v1/ingest' && method === 'POST') (op = ['create_memory', 'ingest']), (attrs['engram.turns'] = (b.turns || b.messages || []).length);
+  else if (path.startsWith('/v1/hooks/') && method === 'POST') {
+    const [, , , harness, event] = path.split('/').map(decodeURIComponent);
+    attrs['engram.harness'] = harness;
+    attrs['engram.hook.event'] = event;
+    if (/^(UserPromptSubmit|BeforeAgent|pre_llm_call|beforeSubmitPrompt)$/i.test(event)) (op = ['search_memory', 'recall']), (query = b.prompt ?? b.user_message);
+    else if (/^SessionStart$/i.test(event) || event === 'sessionStart') op = ['read_memory', 'digest'];
+    else if (/^(Stop|SubagentStop|PreCompact|PostCompact|SessionEnd|PreCompress|AfterAgent|afterAgentResponse|stop|sessionEnd|preCompact|post_llm_call|on_session_end)$/.test(event)) op = ['create_memory', 'capture'];
+    else if (parent) name = `engram.hook ${harness} ${event}`;
+  } else if (path === '/mcp' && method === 'POST' && b?.method === 'tools/call') {
+    const tool = String(b.params?.name ?? '');
+    op = memoryToolSpan(tool);
+    parent = parent ?? parseTraceparent(b.params?._meta?.traceparent);
+    attrs['gen_ai.tool.name'] = tool;
+    attrs['mcp.method.name'] = 'tools/call';
+    query = b.params?.arguments;
+    if (!op) name = `mcp ${tool}`;
+  }
+  if (!op && !name) return null;
+  if (op) {
+    name = `${op[0]} engram`;
+    attrs['gen_ai.operation.name'] = op[0];
+    attrs['blackbox.memory.op'] = op[1];
+  }
+  const span = new Span(name, parent, attrs, 2, settings);
+  span.content('gen_ai.memory.query.text', query);
+  return span;
 }
 
 export interface DaemonOptions {
@@ -155,6 +209,8 @@ export function createHttpHandler(rootDb: DB) {
       if (!authed) return send(res, 401, { error: 'missing or bad bearer token (see ~/.engram/token)' });
       const body = req.method === 'GET' || req.method === 'HEAD' ? Buffer.alloc(0) : await readBody(req);
       const json = () => (body.length ? JSON.parse(body.toString('utf8')) : {});
+      const span = requestSpan(req, path, body, url, principal!.tenant);
+      if (span) res.once('finish', () => span.set({ 'http.response.status_code': res.statusCode }).end(res.statusCode >= 400 ? `HTTP ${res.statusCode}` : undefined));
       if (path === '/mcp') {
         const mcp = mcpFor(principal!.tenant, db, !principal!.scopes.has('write'), principal!.scopes.has('admin'));
         return pipeWebResponse(res, await mcp.fetch(await toWebRequest(req, body)));
@@ -173,6 +229,7 @@ export function createHttpHandler(rootDb: DB) {
         observe('hook', performance.now() - t0, { harness: hook[1], event: hook[2] });
         count('hook', { harness: hook[1], event: hook[2] });
         log('hook', hook[1], hook[2], r.note);
+        span?.set({ 'engram.note': r.note ? String(r.note).slice(0, 500) : undefined }).content('output.value', r.output ?? {});
         return send(res, 200, r.output ?? {});
       }
       if (path === '/v1/context' && req.method === 'GET') {
@@ -181,6 +238,7 @@ export function createHttpHandler(rootDb: DB) {
         const harness = url.searchParams.get('harness') || 'api';
         const key = sid ? touchSession(db, { harness, sessionId: sid, cwd }) : null;
         const d = buildDigest(db, { scope: scopeForCwd(cwd), budget: Number(url.searchParams.get('budget')) || undefined, sessionKey: key, harness });
+        span?.set({ 'engram.scope': scopeForCwd(cwd) }).content('output.value', d.text);
         if (url.searchParams.get('format') === 'json') return send(res, 200, d);
         return send(res, 200, d.text, 'text/markdown; charset=utf-8');
       }
@@ -189,6 +247,7 @@ export function createHttpHandler(rootDb: DB) {
         const { buildRecall } = await import('./digest.ts');
         const key = b.session_id ? touchSession(db, { harness: b.harness || 'api', sessionId: b.session_id, cwd: b.cwd }) : null;
         const r = await buildRecall(db, String(b.prompt || ''), { scope: scopeForCwd(b.cwd), sessionKey: key, embedMode: 'local' });
+        span?.set({ 'engram.recall.ids': r.ids, 'engram.recall.hits': r.ids.length, 'engram.gate': typeof r.gate === 'string' ? r.gate : JSON.stringify(r.gate ?? null).slice(0, 500) }).content('output.value', r.text);
         return send(res, 200, { context: r.text, ids: r.ids, gate: r.gate });
       }
       if (path === '/v1/search' && req.method === 'POST') {
@@ -199,6 +258,7 @@ export function createHttpHandler(rootDb: DB) {
           const hits = await searchMemories(db, { query: String(b.query || ''), scope, kinds: b.kinds, limit: b.limit, asOf: b.as_of, includeSensitive: true, embedMode: 'local' });
           recordAccess(db, hits.map((h) => h.memory.id));
           out.memories = hits.map((h) => ({ ...publicMemory(h.memory), score: h.score, cos: h.cos, why: h.why }));
+          span?.set({ 'engram.search.hits': hits.length, 'engram.recall.ids': hits.map((h) => h.memory.id) });
         }
         if (b.source === 'docs' || b.source === 'all') out.docs = await (await import('./docs.ts')).searchDocs(db, String(b.query || ''), { limit: b.limit, includeSensitive: true, embedMode: 'local' });
         if (b.source === 'conversations' || b.source === 'all') out.conversations = searchConversations(db, String(b.query || ''), { limit: b.limit, scope });
@@ -207,6 +267,7 @@ export function createHttpHandler(rootDb: DB) {
       if (path === '/v1/memories' && req.method === 'POST') {
         const b = json();
         const r = await writeMemory(db, { body: b.text ?? b.body, kind: b.kind, title: b.title, scope: b.scope, cwd: b.cwd, tags: b.tags, importance: b.importance, supersedes: b.supersedes, sensitive: b.sensitive, pinned: b.pinned, trust: b.trust === 'user' ? 'user' : b.trust === 'external' ? 'external' : 'agent', source: { harness: b.harness || 'api', ...(b.source || {}) }, key: b.key, embedMode: 'local' });
+        span?.set({ 'engram.write.status': String(r.status), 'engram.memory.id': (r as any).id ?? undefined }).content('output.value', r);
         return send(res, r.status === 'rejected' ? 400 : 200, r);
       }
       if (path === '/v1/memories' && req.method === 'GET') {
@@ -246,6 +307,7 @@ export function createHttpHandler(rootDb: DB) {
         const added = addTurns(db, key, harness, (b.turns || b.messages || []).map((t: any) => ({ role: t.role === 'assistant' ? 'assistant' : 'user', text: String(t.text ?? t.content ?? ''), ts: t.ts })));
         if (b.end) endSession(db, key);
         enqueue(db, 'extract', `extract:${key}`, { session: key }, b.end ? 0 : loadConfig().extract.idleMinutes * 60000);
+        span?.set({ 'engram.ingest.added': typeof added === 'number' ? added : undefined, 'engram.session': key });
         return send(res, 200, { session: key, added });
       }
       if (path === '/v1/embed' && req.method === 'POST') {
@@ -351,7 +413,10 @@ async function runOneJob(db: DB): Promise<boolean> {
   if (!job) return false;
   try {
     if (job.kind === 'extract') {
-      const r = await extractSession(db, String(job.payload.session));
+      const sessionKey = String(job.payload.session);
+      const span = traceSettings() ? new Span('invoke_agent engram-extractor', null, { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.name': 'engram-extractor', 'engram.session': sessionKey, 'session.id': sessionKey.split(':').slice(1).join(':') || undefined }, 1) : null;
+      const r = await withSpan(span, () => extractSession(db, sessionKey));
+      span?.set({ 'engram.extract.status': r.status, 'engram.extract.reason': r.reason || undefined, 'engram.extract.applied': r.applied.map((a) => `${a.op}:${a.status}`) }).content('output.value', r.applied).end(r.status === 'failed' ? r.reason || 'failed' : undefined);
       count('extract', { status: r.status });
       log('extract', job.payload.session, r.status, r.reason || '', r.applied.map((a) => `${a.op}:${a.status}`).join(','));
       if (r.status === 'deferred') {

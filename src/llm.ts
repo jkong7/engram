@@ -5,6 +5,7 @@ import type { DB } from './db.ts';
 import { getMeta, setMeta } from './db.ts';
 import { loadConfig, paths, type LlmProviderName } from './config.ts';
 import { EXTRACTION_MARKER } from './capture.ts';
+import { Span, activeSpan, traceSettings } from './trace.ts';
 
 export interface CompleteOptions {
   system: string;
@@ -161,8 +162,32 @@ async function ollamaUp(): Promise<boolean> {
   }
 }
 
+function traced(p: Provider | null, model: string | undefined): Provider | null {
+  if (!p || !traceSettings()) return p;
+  return {
+    name: p.name,
+    async complete(o: CompleteOptions): Promise<string> {
+      const parent = activeSpan();
+      const span = new Span(`chat ${model ?? p.name}`, parent?.ctx ?? null, { 'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': p.name.replace(/-cli$/, ''), 'gen_ai.request.model': model ?? p.name, 'gen_ai.agent.name': 'engram-extractor', 'engram.llm.transport': p.name }, 3);
+      span.content('gen_ai.input.messages', [{ role: 'system', parts: [{ type: 'text', content: o.system }] }, { role: 'user', parts: [{ type: 'text', content: o.user }] }]);
+      try {
+        const out = await p.complete(o);
+        span.content('gen_ai.output.messages', [{ role: 'assistant', parts: [{ type: 'text', content: out }] }]).end();
+        return out;
+      } catch (err) {
+        span.end((err as Error).message);
+        throw err;
+      }
+    },
+  };
+}
+
 export async function resolveProvider(): Promise<Provider | null> {
   if (testProvider) return testProvider;
+  return traced(await resolveRaw(), loadConfig().llm.model);
+}
+
+async function resolveRaw(): Promise<Provider | null> {
   const cfg = loadConfig();
   const p = cfg.llm.provider;
   const m = cfg.llm.model;

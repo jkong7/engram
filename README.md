@@ -150,6 +150,17 @@ Add `https://<your-host>/mcp` as a custom connector in claude.ai (Settings, Conn
 
 `~/.engram/config.json`, or `engram config set key value`. Main knobs: `digestBudget` 1500, `recallItems` 5, `recallBudget` 700, `recallFloor` 0.64, `nearDuplicate` 0.92, `bodyMaxChars` 2000, `extract.idleMinutes` 20, `decay.unusedDays` 120, `ingest.maxAgeDays` 14, `embed.enabled`, `llm.provider`, `remote.*`. Environment: `ENGRAM_HOME`, `ENGRAM_PORT`, `ENGRAM_DISABLE`, `ENGRAM_EMBED=off`, `ENGRAM_LLM`, `ENGRAM_DEBUG`.
 
+## Telemetry
+
+engram exports OpenTelemetry spans (OTLP/HTTP JSON, GenAI memory conventions) when an endpoint is set: `"telemetry": { "endpoint": "http://127.0.0.1:4318" }` in `~/.engram/config.json`, or `ENGRAM_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`. Otherwise it is off.
+
+- Each memory request becomes a span with `blackbox.memory.op`: `recall` (per-prompt gate, with hit count and ids), `search`, `digest`, `create`, `update`, `delete`, `ingest` and `capture` (Stop, PreCompact, SessionEnd), whether it arrives over REST, hooks or MCP `tools/call`.
+- An incoming W3C `traceparent` header, or `params._meta.traceparent` on MCP calls, makes the span a child of the caller's span. [loom](../loom) sends both. The hook CLI forwards the `TRACEPARENT` environment variable, which Claude Code sets for hooks when `CLAUDE_CODE_PROPAGATE_TRACEPARENT=1`.
+- Background extraction runs as an `invoke_agent engram-extractor` trace with one `chat` span per LLM call, tagged with the session it distilled.
+- Queries and results are recorded only for loopback endpoints unless `captureContent` (or `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`) says otherwise. `ENGRAM_TELEMETRY=off` disables tracing.
+
+[blackbox](../blackbox) renders these as memory spans and adds them up per harness on its Memory page.
+
 ## Durability details
 
 - Every process (hooks, MCP servers, CLI, daemon) opens the same WAL database with an 8 second busy timeout, so writes land even when the daemon is down. 8 processes writing 400 records concurrently lose nothing (`bench/concurrent-writers.sh`).

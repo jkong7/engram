@@ -28,6 +28,7 @@ export interface EngramConfig {
   remote: { enabled: boolean; port: number; publicUrl: string; allowWrite: boolean; allowForget: boolean };
   sources: { path: string; exclude?: string[] }[];
   retention: { turnsDays: number; deletedDays: number };
+  telemetry?: { enabled?: boolean; endpoint?: string; headers?: Record<string, string>; captureContent?: boolean; serviceName?: string };
 }
 
 export function engramHome(): string {
@@ -92,6 +93,7 @@ export function loadConfig(fresh = false): EngramConfig {
   if (process.env.ENGRAM_EMBED === 'off') cfg.embed.enabled = false;
   if (process.env.ENGRAM_LLM) cfg.llm.provider = process.env.ENGRAM_LLM as LlmProviderName;
   if (process.env.ENGRAM_PORT) cfg.port = Number(process.env.ENGRAM_PORT);
+  if (process.env.ENGRAM_HOST) cfg.host = process.env.ENGRAM_HOST;
   cached = cfg;
   return cfg;
 }

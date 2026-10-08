@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { loadConfig } from './config.ts';
@@ -225,4 +226,14 @@ const MEMORY_OPS: Record<string, [string, string]> = {
 
 export function memoryToolSpan(tool: string): [string, string] | null {
   return MEMORY_OPS[tool] ?? null;
+}
+
+const active = new AsyncLocalStorage<Span>();
+
+export function activeSpan(): Span | undefined {
+  return active.getStore();
+}
+
+export function withSpan<T>(span: Span | null | undefined, fn: () => T): T {
+  return span ? active.run(span, fn) : fn();
 }

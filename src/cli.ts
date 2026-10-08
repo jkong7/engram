@@ -49,7 +49,7 @@ function parseArgs(argv: string[]): Args {
   return out;
 }
 
-const BOOL_FLAGS = new Set(['json', 'pin', 'unpin', 'sensitive', 'history', 'dry-run', 'all', 'force', 'read-only', 'stdin', 'end', 'no-forget', 'yes', 'pending', 'quiet', 'foreground', 'user']);
+const BOOL_FLAGS = new Set(['e2e', 'json', 'pin', 'unpin', 'sensitive', 'history', 'dry-run', 'all', 'force', 'read-only', 'stdin', 'end', 'no-forget', 'yes', 'pending', 'quiet', 'foreground', 'user']);
 const SHORT: Record<string, string> = { j: 'json', h: 'help', n: 'dry-run', y: 'yes', q: 'quiet' };
 
 function str(f: Args['flags'], k: string): string | undefined {
@@ -92,7 +92,7 @@ async function daemonPost(path: string, body: unknown, timeoutMs: number): Promi
     try {
       const r = await fetch(`http://${cfg.host}:${cfg.port}${path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${authToken()}` },
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${authToken()}`, ...(process.env.TRACEPARENT ? { traceparent: process.env.TRACEPARENT } : {}) },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -649,7 +649,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return;
     }
     case 'eval': {
-      const { runEval } = await import('./eval.ts');
+      const { runEval, runE2E } = await import('./eval.ts');
+      if (a.flags.e2e) {
+        await runE2E({ json, provider: str(a.flags, 'provider') });
+        return;
+      }
       await runEval({ json, verbose: !!a.flags.verbose, sweep: str(a.flags, 'sweep')?.split(',').map(Number) });
       return;
     }
