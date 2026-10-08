@@ -477,6 +477,41 @@ function uninstallLaunchd(o: Opts): void {
   console.log('launchd agent removed');
 }
 
+function systemdUnitPath(): string {
+  return join(HOME, '.config', 'systemd', 'user', 'engram.service');
+}
+
+function installSystemd(o: Opts): void {
+  const unit = `[Unit]
+Description=engram memory daemon
+After=network.target
+
+[Service]
+ExecStart=${NODE} ${BIN} daemon run --quiet
+Restart=always
+RestartSec=5
+Environment=HOME=${HOME}${process.env.ENGRAM_HOME ? `\nEnvironment=ENGRAM_HOME=${process.env.ENGRAM_HOME}` : ''}
+Environment=PATH=${dirname(NODE)}:${join(HOME, '.local', 'bin')}:/usr/local/bin:/usr/bin:/bin
+Nice=10
+
+[Install]
+WantedBy=default.target
+`;
+  if (o.dryRun) return console.log(`[dry-run] would write ${systemdUnitPath()}\n${unit}`);
+  mkdirSync(dirname(systemdUnitPath()), { recursive: true });
+  writeFileSync(systemdUnitPath(), unit);
+  spawnSync('systemctl', ['--user', 'daemon-reload']);
+  const r = spawnSync('systemctl', ['--user', 'enable', '--now', 'engram.service'], { encoding: 'utf8' });
+  console.log(r.status === 0 ? 'systemd user service engram enabled and started' : `systemctl failed: ${r.stderr || 'systemctl not available'}`);
+}
+
+function uninstallSystemd(o: Opts): void {
+  if (o.dryRun) return console.log(`[dry-run] would disable and remove ${systemdUnitPath()}`);
+  spawnSync('systemctl', ['--user', 'disable', '--now', 'engram.service']);
+  if (existsSync(systemdUnitPath())) unlinkSync(systemdUnitPath());
+  spawnSync('systemctl', ['--user', 'daemon-reload']);
+}
+
 function installPath(o: Opts): void {
   const link = join(HOME, '.local', 'bin', 'engram');
   if (o.dryRun) return console.log(`[dry-run] would link ${link} -> ${BIN}`);
@@ -505,6 +540,7 @@ const TARGETS: Record<string, { install: (o: Opts) => void; uninstall: (o: Opts)
   hermes: { install: installHermes, uninstall: uninstallHermes, detect: () => existsSync(join(HOME, '.hermes')) },
   'claude-desktop': { install: installClaudeDesktop, uninstall: uninstallClaudeDesktop, detect: () => existsSync(dirname(claudeDesktopFile())) },
   launchd: { install: installLaunchd, uninstall: uninstallLaunchd, detect: () => process.platform === 'darwin' },
+  systemd: { install: installSystemd, uninstall: uninstallSystemd, detect: () => process.platform === 'linux' },
   path: { install: installPath, uninstall: uninstallPath, detect: () => true },
 };
 

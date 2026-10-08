@@ -31,29 +31,35 @@ export interface Hit {
   why: string[];
 }
 
-interface VecEntry {
+export interface VecEntry {
   id: string;
   rid: number;
+  kind: string;
+  scope: string;
+  status: string;
   vec: Float32Array;
 }
 
 const vecCache = new Map<string, { sig: string; entries: VecEntry[] }>();
 
-function vectorEntries(db: DB, statuses: Status[]): VecEntry[] {
+export function vectorIndex(db: DB): VecEntry[] {
   const model = embedModelName();
-  const sig = db
-    .prepare(`select count(*) n, max(updated_at) u, sum(length(embedding)) l from memories where embedding is not null and embed_model = ?`)
-    .get(model) as { n: number; u: string | null; l: number | null };
-  const key = `${db.location() ?? 'mem'}|${statuses.join(',')}`;
-  const sigStr = `${sig.n}|${sig.u}|${sig.l}`;
+  const row = db.prepare("select v from meta where k = 'vec_version'").get() as { v: string } | undefined;
+  const key = db.location() ?? 'mem';
+  const sigStr = `${row?.v ?? 'x'}|${model}`;
   const hit = vecCache.get(key);
-  if (hit && hit.sig === sigStr) return hit.entries;
+  if (hit && hit.sig === sigStr && row) return hit.entries;
   const rows = db
-    .prepare(`select rid, id, embedding from memories where embedding is not null and embed_model = ? and status in (${statuses.map(() => '?').join(',')})`)
-    .all(model, ...statuses) as { rid: number; id: string; embedding: Uint8Array }[];
-  const entries = rows.map((r) => ({ id: r.id, rid: r.rid, vec: fromBlob(r.embedding)! }));
+    .prepare(`select rid, id, kind, scope, status, embedding from memories where embedding is not null and embed_model = ? and status != 'deleted'`)
+    .all(model) as { rid: number; id: string; kind: string; scope: string; status: string; embedding: Uint8Array }[];
+  const entries = rows.map((r) => ({ id: r.id, rid: r.rid, kind: r.kind, scope: r.scope, status: r.status, vec: fromBlob(r.embedding)! }));
   vecCache.set(key, { sig: sigStr, entries });
   return entries;
+}
+
+function vectorEntries(db: DB, statuses: Status[]): VecEntry[] {
+  const set = new Set<string>(statuses);
+  return vectorIndex(db).filter((e) => set.has(e.status));
 }
 
 function stemmedSet(text: string): Set<string> {

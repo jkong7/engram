@@ -182,6 +182,18 @@ const MIGRATIONS: string[] = [
     revoked integer not null default 0
   );
   `,
+  `
+  insert or ignore into meta(k, v) values ('vec_version', '0');
+  create trigger memories_vec_ai after insert on memories begin
+    update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+  end;
+  create trigger memories_vec_ad after delete on memories begin
+    update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+  end;
+  create trigger memories_vec_au after update of body, title, status, scope, kind, embedding, embed_model, sensitive, trust, flags on memories begin
+    update meta set v = cast(v as integer) + 1 where k = 'vec_version';
+  end;
+  `,
 ];
 
 const opened = new Map<string, DB>();

@@ -4,7 +4,8 @@ import { loadConfig } from './config.ts';
 import { redactSecrets, scanInjection, looksSensitive } from './safety.ts';
 import { normalizeScope } from './scope.ts';
 import { embedOne, embedModelName, type EmbedMode } from './embed.ts';
-import { newId, nowIso, sha, normalize, clip, safeJson, cosine, toBlob, fromBlob, contentTerms } from './util.ts';
+import { newId, nowIso, sha, normalize, clip, safeJson, cosine, toBlob, fromBlob, contentTerms, ftsQuery } from './util.ts';
+import { vectorIndex } from './search.ts';
 
 export const KINDS = ['profile', 'preference', 'fact', 'decision', 'procedure', 'episode', 'reference'] as const;
 export type Kind = (typeof KINDS)[number];
@@ -248,25 +249,47 @@ function jaccard(a: string[], b: string[]): number {
 
 function findNearDuplicate(db: DB, kind: Kind, scope: string, title: string, body: string, vec: Float32Array | null): { m: Memory; sim: number } | null {
   const cfg = loadConfig();
-  const rows = db
-    .prepare("select * from memories where kind = ? and scope = ? and status in ('active','pending')")
-    .all(kind, scope) as Row[];
   let best: { m: Memory; sim: number } | null = null;
   const nt = normalize(title);
   const terms = contentTerms(title + ' ' + body);
-  for (const r of rows) {
-    const m = rowToMemory(r);
-    let sim = 0;
-    if (vec && m.embedding && m.embed_model === embedModelName()) sim = cosine(vec, m.embedding);
-    else {
-      const j = jaccard(terms, contentTerms(m.title + ' ' + m.body));
-      sim = j >= 0.8 ? 0.93 : j;
-    }
+  const consider = (m: Memory, sim: number) => {
     if (normalize(m.title) === nt && nt.length > 12 && sim < cfg.nearDuplicate) {
       const j = jaccard(terms, contentTerms(m.title + ' ' + m.body));
       if (j >= 0.5) sim = Math.max(sim, cfg.nearDuplicate);
     }
     if (sim >= cfg.nearDuplicate && (!best || sim > best.sim)) best = { m, sim };
+  };
+  const seen = new Set<string>();
+  if (vec) {
+    for (const e of vectorIndex(db)) {
+      if (e.kind !== kind || e.scope !== scope || (e.status !== 'active' && e.status !== 'pending')) continue;
+      const sim = cosine(vec, e.vec);
+      if (sim < cfg.nearDuplicate) continue;
+      const m = getMemory(db, e.id);
+      if (m) {
+        seen.add(m.id);
+        consider(m, sim);
+      }
+    }
+  }
+  const fq = ftsQuery(title + ' ' + body, 16);
+  const lexical = fq
+    ? (db
+        .prepare("select m.* from memories_fts f join memories m on m.rid = f.rowid where memories_fts match ? and m.kind = ? and m.scope = ? and m.status in ('active','pending') order by bm25(memories_fts) limit 25")
+        .all(fq, kind, scope) as Row[])
+    : [];
+  const titleRows = db.prepare("select * from memories where kind = ? and scope = ? and status in ('active','pending') and lower(title) = ? limit 5").all(kind, scope, title.toLowerCase().trim()) as Row[];
+  for (const r of [...lexical, ...titleRows]) {
+    const m = rowToMemory(r);
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    let sim: number;
+    if (vec && m.embedding && m.embed_model === embedModelName()) sim = cosine(vec, m.embedding);
+    else {
+      const j = jaccard(terms, contentTerms(m.title + ' ' + m.body));
+      sim = j >= 0.8 ? 0.93 : j;
+    }
+    consider(m, sim);
   }
   return best;
 }
