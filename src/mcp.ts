@@ -70,10 +70,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
     'memory_search',
     {
       title: 'Search memory',
-      description: 'Search the user\'s long-term memory with hybrid keyword and semantic matching. source="memories" (default) searches saved facts, preferences, decisions, procedures and session summaries; source="conversations" searches the raw archive of past conversations across all agents (use for "what did we discuss about X" or "last week"); source="all" does both. Use as_of (ISO date) to see what was true at a past time.',
+      description: 'Search the user\'s long-term memory with hybrid keyword and semantic matching. source="memories" (default) searches saved facts, preferences, decisions, procedures and session summaries; source="conversations" searches the raw archive of past conversations across all agents (use for "what did we discuss about X" or "last week"); source="docs" searches the indexed notes (e.g. their Obsidian vault); source="all" does all three. Use as_of (ISO date) to see what was true at a past time.',
       inputSchema: z.object({
         query: z.string().min(1).describe('Natural language query or keywords'),
-        source: z.enum(['memories', 'conversations', 'all']).optional(),
+        source: z.enum(['memories', 'conversations', 'docs', 'all']).optional(),
         kinds: z.array(kindEnum).optional().describe('Restrict to these kinds'),
         scope: z.string().optional().describe('"global", "project", a project path, or omit for current project plus global'),
         cwd: z.string().optional(),
@@ -89,7 +89,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       const active = scope ? normalizeScope(scope, cwd ?? ctx.cwd) : activeScope(cwd);
       const out: Record<string, unknown> = { query, scope: active };
       let text = '';
-      if (src !== 'conversations') {
+      if (src === 'memories' || src === 'all') {
         const hint = parseTimeHint(query);
         const hits = await searchMemories(db, {
           query,
@@ -107,7 +107,13 @@ export function createMcpServer(ctx: McpContext): McpServer {
           ? hits.map((h) => `[${h.memory.id}] (${h.memory.kind}, ${h.memory.scope}, ${h.memory.updated_at.slice(0, 10)}${h.memory.status !== 'active' ? ', ' + h.memory.status : ''}) ${h.memory.body}`).join('\n')
           : 'No matching memories.';
       }
-      if (src !== 'memories') {
+      if (src === 'docs' || src === 'all') {
+        const { searchDocs } = await import('./docs.ts');
+        const docs = await searchDocs(db, query, { limit: Math.min(limit ?? 5, 10), includeSensitive: true });
+        out.docs = docs;
+        text += (text ? '\n\n' : '') + (docs.length ? 'Notes:\n' + docs.map((d) => `- ${d.path} > ${d.heading}\n    ${d.snippet}`).join('\n') : 'No matching notes.');
+      }
+      if (src === 'conversations' || src === 'all') {
         const convs = searchConversations(db, query, { limit: Math.min(limit ?? 5, 10), scope: active });
         out.conversations = convs;
         text += (text ? '\n\n' : '') + (convs.length ? 'Past conversations:\n' + convs.map((c) => `- ${c.started_at.slice(0, 10)} ${c.harness} "${c.title || c.session_id}" (${c.cwd || 'no cwd'})\n${c.turns.map((t) => `    ${t.role}: ${t.snippet}`).join('\n')}`).join('\n') : 'No matching conversations.');

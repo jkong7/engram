@@ -158,11 +158,12 @@ export function createHttpHandler(db: DB) {
         const b = json();
         const scope = b.scope ? normalizeScope(b.scope, b.cwd) : scopeForCwd(b.cwd);
         const out: Record<string, unknown> = {};
-        if (b.source !== 'conversations') {
+        if (b.source !== 'conversations' && b.source !== 'docs') {
           const hits = await searchMemories(db, { query: String(b.query || ''), scope, kinds: b.kinds, limit: b.limit, asOf: b.as_of, includeSensitive: true, embedMode: 'local' });
           recordAccess(db, hits.map((h) => h.memory.id));
           out.memories = hits.map((h) => ({ ...publicMemory(h.memory), score: h.score, cos: h.cos, why: h.why }));
         }
+        if (b.source === 'docs' || b.source === 'all') out.docs = await (await import('./docs.ts')).searchDocs(db, String(b.query || ''), { limit: b.limit, includeSensitive: true, embedMode: 'local' });
         if (b.source === 'conversations' || b.source === 'all') out.conversations = searchConversations(db, String(b.query || ''), { limit: b.limit, scope });
         return send(res, 200, out);
       }
@@ -376,6 +377,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
           writeMirror(db);
           writeFileSync(join(paths().home, 'digest.md'), buildDigest(db, { scope: 'global', record: false }).text + '\n');
           setMeta(db, 'last_mirror', nowIso());
+        }
+        if (maintenanceDue(db, 'last_docs', 15 * 60000)) {
+          setMeta(db, 'last_docs', nowIso());
+          const r = await (await import('./docs.ts')).indexSources(db, { embedMode: 'local' });
+          if (r.files || r.removed) log('docs index', r);
         }
         if (maintenanceDue(db, 'last_claude_sync', 30 * 60000)) {
           setMeta(db, 'last_claude_sync', nowIso());

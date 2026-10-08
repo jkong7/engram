@@ -26,6 +26,7 @@ export interface EngramConfig {
   backups: { keep: number };
   excludeCwds: string[];
   remote: { enabled: boolean; port: number; publicUrl: string; allowWrite: boolean; allowForget: boolean };
+  sources: { path: string; exclude?: string[] }[];
 }
 
 export function engramHome(): string {
@@ -54,6 +55,7 @@ function defaults(home: string): EngramConfig {
     backups: { keep: 14 },
     excludeCwds: [join(home, 'work')],
     remote: { enabled: false, port: 7433, publicUrl: '', allowWrite: true, allowForget: false },
+    sources: [],
   };
 }
 

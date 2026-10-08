@@ -230,7 +230,7 @@ const HELP = `engram ${VERSION}: durable personal memory for any AI agent harnes
 
 Memories
   engram add <text> [--kind K] [--scope global|project|PATH] [--tags a,b] [--importance N] [--pin] [--sensitive]
-  engram search <query> [--source memories|conversations|all] [--kind K] [--as-of DATE] [--limit N] [--json]
+  engram search <query> [--source memories|conversations|docs|all] [--kind K] [--as-of DATE] [--limit N] [--json]
   engram list [--kind K] [--scope S] [--status active,pending,...] [--limit N] [--json]
   engram get <id...> [--history] [--json]
   engram edit <id> [--text T] [--title T] [--kind K] [--scope S] [--importance N] [--pin|--unpin] [--outdated]
@@ -258,6 +258,7 @@ Integration
 
 Data
   engram import claude-memory [DIR] | engram import json FILE | engram export [--out FILE]
+  engram sources [add PATH --exclude a,b | remove PATH] | engram index
   engram stats | engram sessions | engram jobs | engram config [get|set KEY VALUE] | engram eval
 
 Home: ${process.env.ENGRAM_HOME || '~/.engram'} (override with ENGRAM_HOME). Disable all hooks: ENGRAM_DISABLE=1.`;
@@ -323,7 +324,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const source = str(a.flags, 'source') || 'memories';
       const scope = str(a.flags, 'scope') ? normalizeScope(str(a.flags, 'scope'), cwd) : scopeForCwd(cwd);
       const out: Record<string, unknown> = {};
-      if (source !== 'conversations') {
+      if (source === 'memories' || source === 'all') {
         const hits = await searchMemories(db, { query, scope, kinds: str(a.flags, 'kind')?.split(',') as never, asOf: str(a.flags, 'as-of'), limit: num(a.flags, 'limit') || 10, includeSensitive: true, statuses: a.flags.all ? ['active', 'superseded', 'archived'] : undefined });
         out.memories = hits;
         if (!json) {
@@ -334,7 +335,13 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
           }
         }
       }
-      if (source !== 'memories') {
+      if (source === 'docs' || source === 'all') {
+        const { searchDocs } = await import('./docs.ts');
+        const docs = await searchDocs(db, query, { limit: num(a.flags, 'limit') || 5, includeSensitive: true });
+        out.docs = docs;
+        if (!json) for (const d of docs) console.log(`\n${d.path} > ${d.heading}\n  ${d.snippet}`);
+      }
+      if (source === 'conversations' || source === 'all') {
         const convs = searchConversations(db, query, { limit: num(a.flags, 'limit') || 5, scope });
         out.conversations = convs;
         if (!json)
@@ -476,6 +483,29 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     case 'consolidate':
       return console.log(JSON.stringify(await consolidate(db, { dryRun: !!a.flags['dry-run'] }), null, 2));
+    case 'sources': {
+      const sub = a._[1] || 'list';
+      const cfg = loadConfig(true);
+      if (sub === 'add' && a._[2]) {
+        const path = a._[2].replace(process.env.HOME || '', '~');
+        const exclude = str(a.flags, 'exclude')?.split(',').map((x) => x.trim()).filter(Boolean) || [];
+        saveConfigPatch({ sources: [...cfg.sources.filter((x) => x.path !== path), { path, exclude }] });
+        return console.log(`added source ${path}${exclude.length ? ' excluding ' + exclude.join(', ') : ''}; run engram index`);
+      }
+      if (sub === 'remove' && a._[2]) {
+        const path = a._[2].replace(process.env.HOME || '', '~');
+        saveConfigPatch({ sources: cfg.sources.filter((x) => x.path !== path) });
+        db.exec(`delete from docs where source = '${path.replace(/'/g, "''")}'`);
+        return console.log(`removed source ${path}`);
+      }
+      for (const x of cfg.sources) console.log(`${x.path}${x.exclude?.length ? '  (excluding ' + x.exclude.join(', ') + ')' : ''}`);
+      return cfg.sources.length ? undefined : console.log('No sources. Add one with: engram sources add ~/brain --exclude journal,daily');
+    }
+    case 'index': {
+      setEmbedMode('local');
+      const { indexSources } = await import('./docs.ts');
+      return console.log(JSON.stringify(await indexSources(db, { embedMode: 'local' })));
+    }
     case 'rescope': {
       const { rescope } = await import('./maintain.ts');
       const r = rescope(db, { dryRun: !!a.flags['dry-run'] });
