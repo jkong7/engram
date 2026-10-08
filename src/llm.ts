@@ -203,8 +203,12 @@ async function resolveRaw(): Promise<Provider | null> {
 export function underRateLimit(db: DB): boolean {
   const cfg = loadConfig();
   const stamps = JSON.parse(getMeta(db, 'llm_calls') || '[]') as number[];
-  const hourAgo = Date.now() - 3600000;
-  return stamps.filter((t) => t > hourAgo).length < cfg.llm.maxExtractionsPerHour;
+  const now = Date.now();
+  const recent = stamps.filter((t) => t > now - 3600000);
+  if (recent.length >= cfg.llm.maxExtractionsPerHour) return false;
+  const spacing = (3600000 / Math.max(1, cfg.llm.maxExtractionsPerHour)) * 0.8;
+  const last = recent.length ? Math.max(...recent) : 0;
+  return now - last >= spacing;
 }
 
 export function noteCall(db: DB): void {

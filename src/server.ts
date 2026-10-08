@@ -421,7 +421,7 @@ async function runOneJob(db: DB): Promise<boolean> {
       log('extract', job.payload.session, r.status, r.reason || '', r.applied.map((a) => `${a.op}:${a.status}`).join(','));
       if (r.status === 'deferred') {
         if (r.reason === 'no LLM provider configured') defer(db, job, 6 * 3600000, r.reason);
-        else if (r.reason === 'hourly LLM budget used') defer(db, job, 20 * 60000, r.reason);
+        else if (r.reason === 'hourly LLM budget used') defer(db, job, Math.round((3600000 / Math.max(1, loadConfig().llm.maxExtractionsPerHour)) * (1 + Math.random())), r.reason);
         else defer(db, job, loadConfig().extract.idleMinutes * 60000, r.reason);
       } else if (r.status === 'failed') fail(db, job, new Error(r.reason || 'failed'));
       else complete(db, job);
