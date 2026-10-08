@@ -60,6 +60,7 @@ const HARNESS_ALIASES: Record<string, string> = {
   'gemini-cli': 'gemini',
   opencode: 'opencode',
   hermes: 'hermes',
+  loom: 'loom',
 };
 
 export function normalizeHarness(h: string): string {

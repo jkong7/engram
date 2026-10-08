@@ -21,7 +21,7 @@ export interface EngramConfig {
   llm: { provider: LlmProviderName; model?: string; maxExtractionsPerHour: number; timeoutMs: number };
   extract: { idleMinutes: number; minTurns: number; maxTranscriptChars: number };
   decay: { unusedDays: number; maxImportance: number };
-  ingest: { claudeCode: boolean; codex: boolean; intervalSeconds: number; maxAgeDays: number };
+  ingest: { claudeCode: boolean; codex: boolean; loom?: boolean; intervalSeconds: number; maxAgeDays: number };
   mirror: { enabled: boolean; git: boolean };
   backups: { keep: number };
   excludeCwds: string[];

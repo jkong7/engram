@@ -9,7 +9,7 @@ import { handleHook } from '../src/hooks.ts';
 import { writeMemory, getMemory, listMemories } from '../src/store.ts';
 import { enqueue, claim, complete, fail } from '../src/jobs.ts';
 import { extractSession } from '../src/extract.ts';
-import { parseCodexLines, parseClaudeCodeLines, ingestTranscript, sessionTurns } from '../src/capture.ts';
+import { parseCodexLines, parseClaudeCodeLines, parseLoomLines, ingestTranscript, sessionTurns } from '../src/capture.ts';
 import { decay } from '../src/maintain.ts';
 import { searchConversations } from '../src/search.ts';
 import type { Provider } from '../src/llm.ts';
@@ -124,6 +124,18 @@ describe('transcript parsers', () => {
     assert.equal(p.meta.sessionId, 'cx1');
     assert.deepEqual(p.turns.map((t) => t.role), ['user', 'assistant']);
     assert.equal(p.meta.title, 'rename the module to core');
+  });
+
+  test('loom transcript parsing', () => {
+    const p = parseLoomLines([
+      JSON.stringify({ type: 'session', session_id: 'l1', cwd: '/Users/x/dev/loom', harness: 'loom' }),
+      JSON.stringify({ type: 'message', role: 'user', text: 'add a provider for gemini', ts: '2026-10-07T00:00:00Z' }),
+      JSON.stringify({ type: 'message', role: 'tool', text: 'ok', ts: '2026-10-07T00:00:01Z' }),
+      JSON.stringify({ type: 'compaction', summary: 'x' }),
+      JSON.stringify({ type: 'message', role: 'assistant', text: 'Added.', ts: '2026-10-07T00:00:02Z' }),
+    ]);
+    assert.equal(p.meta.sessionId, 'l1');
+    assert.deepEqual(p.turns.map((t) => t.role), ['user', 'assistant']);
   });
 
   test('Claude parser marks internal extraction sessions', () => {

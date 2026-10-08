@@ -182,9 +182,42 @@ export function parseCodexLines(lines: string[]): Parsed {
   return out;
 }
 
+export function parseLoomLines(lines: string[]): Parsed {
+  const out: Parsed = { turns: [], meta: {} };
+  for (const line of lines) {
+    let d: Record<string, any>;
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (d.type === 'session') {
+      out.meta.sessionId = d.session_id;
+      out.meta.cwd = d.cwd;
+      if (d.title) out.meta.title = d.title;
+      if (d.parent_session_id || d.subagent) out.meta.sidechain = true;
+      continue;
+    }
+    if (d.session_id && !out.meta.sessionId) out.meta.sessionId = d.session_id;
+    if (d.cwd && !out.meta.cwd) out.meta.cwd = d.cwd;
+    if (d.type !== 'message' || (d.role !== 'user' && d.role !== 'assistant')) continue;
+    if (d.meta === 'memory' || d.synthetic) continue;
+    const text = typeof d.text === 'string' ? d.text : '';
+    if (!text.trim()) continue;
+    if (text.includes(EXTRACTION_MARKER)) out.meta.internal = true;
+    out.turns.push({ role: d.role, text, ts: d.ts });
+  }
+  if (!out.meta.title) {
+    const first = out.turns.find((t) => t.role === 'user' && !isNoise(t.text));
+    if (first) out.meta.title = clip(first.text.replace(/\s+/g, ' '), 80);
+  }
+  return out;
+}
+
 export const PARSERS: Record<string, (lines: string[]) => Parsed> = {
   'claude-code': parseClaudeCodeLines,
   codex: parseCodexLines,
+  loom: parseLoomLines,
 };
 
 function readFrom(path: string, offset: number): { lines: string[]; next: number; size: number } {
@@ -268,6 +301,7 @@ export function transcriptRoots() {
   return {
     'claude-code': process.env.ENGRAM_CLAUDE_PROJECTS || join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects'),
     codex: process.env.ENGRAM_CODEX_SESSIONS || join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'sessions'),
+    loom: process.env.ENGRAM_LOOM_SESSIONS || join(process.env.LOOM_HOME || join(homedir(), '.loom'), 'sessions'),
   };
 }
 
@@ -275,7 +309,7 @@ export function scanTranscripts(db: DB, opts: { maxAgeDays?: number; harnesses?:
   const cfg = loadConfig();
   const maxAge = (opts.maxAgeDays ?? cfg.ingest.maxAgeDays) * 86400000;
   const roots = transcriptRoots();
-  const want = opts.harnesses || [...(cfg.ingest.claudeCode ? ['claude-code'] : []), ...(cfg.ingest.codex ? ['codex'] : [])];
+  const want = opts.harnesses || [...(cfg.ingest.claudeCode ? ['claude-code'] : []), ...(cfg.ingest.codex ? ['codex'] : []), ...(cfg.ingest.loom !== false ? ['loom'] : [])];
   let files = 0;
   let added = 0;
   const sessions = new Set<string>();

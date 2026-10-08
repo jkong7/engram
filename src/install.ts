@@ -92,9 +92,9 @@ function stripOurHooks(hooks: Record<string, any[]>): Record<string, any[]> {
 const CLAUDE_EVENTS: [string, Record<string, unknown>][] = [
   ['SessionStart', { timeout: 15 }],
   ['UserPromptSubmit', { timeout: 15 }],
-  ['Stop', { timeout: 30, async: true }],
+  ['Stop', { timeout: 15 }],
   ['PreCompact', { timeout: 30 }],
-  ['PostCompact', { timeout: 10, async: true }],
+  ['PostCompact', { timeout: 10 }],
   ['SessionEnd', { timeout: 15 }],
 ];
 
