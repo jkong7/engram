@@ -162,7 +162,7 @@ export async function handleHook(db: DB, harnessIn: string, event: string, input
     }
     case 'prompt': {
       if (c.prompt) addTurns(db, key, c.harness, [{ role: 'user', text: c.prompt }]);
-      if (c.harness === 'cursor') return { output: null, context: '', sessionKey: key, note: 'cursor cannot inject at prompt time' };
+      if (c.harness === 'cursor') return { output: { continue: true }, context: '', sessionKey: key, note: 'cursor cannot inject at prompt time' };
       const fresh = (db.prepare("select count(*) n from injections where session_key = ? and via = 'digest'").get(key) as { n: number }).n === 0;
       let context = '';
       let note = '';

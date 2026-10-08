@@ -191,7 +191,10 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
     hits.push({ memory: m, score, cos: c, coverage, matched, why });
   }
   hits.sort((a, b) => b.score - a.score);
-  return mmr(hits.slice(0, limit * 4), limit, 0.72);
+  const top = hits[0]?.score ?? 0;
+  const rel = mode === 'recall' ? 0.45 : 0.4;
+  const kept = hits.filter((h) => h.score >= top * rel);
+  return mmr(kept.slice(0, limit * 4), limit, 0.72);
 }
 
 function mmr(hits: Hit[], k: number, lambda: number): Hit[] {
