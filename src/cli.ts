@@ -171,6 +171,28 @@ async function cmdDaemon(a: Args): Promise<void> {
     process.on('SIGINT', () => void stop());
     return new Promise(() => {});
   }
+  const plist = join(process.env.HOME || '', 'Library', 'LaunchAgents', 'com.engram.daemon.plist');
+  const managed = process.platform === 'darwin' && existsSync(plist) && !process.env.ENGRAM_HOME;
+  const domain = `gui/${process.getuid?.() ?? 501}`;
+  const waitUp = async (want: boolean) => {
+    for (let i = 0; i < 40; i++) {
+      if ((await daemonUp()) === want) return true;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return false;
+  };
+  if (managed && (sub === 'start' || sub === 'stop' || sub === 'restart')) {
+    if (sub === 'stop') {
+      spawnSync('launchctl', ['bootout', `${domain}/com.engram.daemon`]);
+      await waitUp(false);
+      return console.log('engram daemon stopped and unloaded from launchd (engram daemon start to bring it back)');
+    }
+    const loaded = spawnSync('launchctl', ['print', `${domain}/com.engram.daemon`]).status === 0;
+    if (!loaded) spawnSync('launchctl', ['bootstrap', domain, plist]);
+    else spawnSync('launchctl', ['kickstart', ...(sub === 'restart' ? ['-k'] : []), `${domain}/com.engram.daemon`]);
+    if (sub === 'restart') await new Promise((r) => setTimeout(r, 500));
+    return console.log((await waitUp(true)) ? `engram daemon ${sub === 'restart' ? 'restarted' : 'running'} under launchd on http://${cfg.host}:${cfg.port}` : 'daemon did not come up; see ~/.engram/logs/launchd.err.log');
+  }
   if (sub === 'start') {
     if (await daemonUp()) return console.log(`engram daemon already running on ${cfg.host}:${cfg.port}`);
     mkdirSync(paths().logs, { recursive: true });
