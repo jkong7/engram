@@ -85,6 +85,7 @@ export interface WriteInput {
   batch?: string;
   embedMode?: EmbedMode;
   dedupe?: boolean;
+  maxChars?: number;
 }
 
 export type WriteStatus = 'created' | 'duplicate' | 'merged' | 'updated' | 'pending' | 'rejected';
@@ -281,7 +282,7 @@ export async function writeMemory(db: DB, input: WriteInput): Promise<WriteResul
   const red = redactSecrets(raw);
   const body = red.text;
   const kind = normalizeKind(input.kind as string | undefined, body);
-  const cap = kind === 'procedure' ? cfg.bodyMaxChars * 4 : kind === 'episode' ? cfg.bodyMaxChars * 2 : cfg.bodyMaxChars;
+  const cap = input.maxChars ?? (kind === 'procedure' ? cfg.bodyMaxChars * 4 : kind === 'episode' ? cfg.bodyMaxChars * 2 : cfg.bodyMaxChars);
   if (body.length > cap) {
     return {
       id: null,

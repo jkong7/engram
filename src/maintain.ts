@@ -283,7 +283,8 @@ export async function importClaudeMemoryDir(db: DB, dir: string): Promise<{ impo
     const r = await writeMemory(db, {
       body: text,
       title: clip(fm.description || name, 120),
-      kind: text.length > 2000 && kind !== 'procedure' ? 'procedure' : kind,
+      kind,
+      maxChars: 8000,
       scope: 'global',
       trust: 'agent',
       key: `claude-memory:${name}`,
