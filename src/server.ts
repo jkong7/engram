@@ -16,7 +16,7 @@ import { scopeForCwd, normalizeScope } from './scope.ts';
 import { touchSession, addTurns, endSession, scanTranscripts } from './capture.ts';
 import { enqueue, claim, complete, fail, defer, pruneJobs } from './jobs.ts';
 import { extractSession } from './extract.ts';
-import { consolidate, decay, writeMirror, backup, maintenanceDue } from './maintain.ts';
+import { consolidate, decay, writeMirror, backup, maintenanceDue, importClaudeMemoryDir } from './maintain.ts';
 import { resolveProvider } from './llm.ts';
 import { getMeta, setMeta } from './db.ts';
 import { nowIso } from './util.ts';
@@ -375,6 +375,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
           writeMirror(db);
           writeFileSync(join(paths().home, 'digest.md'), buildDigest(db, { scope: 'global', record: false }).text + '\n');
           setMeta(db, 'last_mirror', nowIso());
+        }
+        if (maintenanceDue(db, 'last_claude_sync', 30 * 60000)) {
+          setMeta(db, 'last_claude_sync', nowIso());
+          const { claudeMemoryDirs } = await import('./install.ts');
+          for (const dir of claudeMemoryDirs()) {
+            const r = await importClaudeMemoryDir(db, dir);
+            if (r.imported) log('claude memory sync', dir, r);
+          }
         }
         if (maintenanceDue(db, 'last_daily', 24 * 3600000)) {
           setMeta(db, 'last_daily', nowIso());

@@ -130,6 +130,12 @@ describe('store without embeddings', () => {
     assert.ok(r.ids.includes(w.id!), r.gate);
   });
 
+  test('time words pull in episodes from that window', async () => {
+    const e = await writeMemory(db, { body: 'Session summary: tuned the recall floor and shipped the OAuth listener.', title: 'engram tuning session', kind: 'episode' });
+    const hits = await searchMemories(db, { query: 'what did we work on today', mode: 'recall' });
+    assert.ok(hits.some((h) => h.memory.id === e.id), JSON.stringify(hits.map((h) => h.memory.title)));
+  });
+
   test('kind inference', () => {
     assert.equal(inferKind('We decided to use SQLite instead of Postgres'), 'decision');
     assert.equal(inferKind('Sam prefers no em dashes in writing'), 'preference');

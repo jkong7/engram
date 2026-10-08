@@ -279,6 +279,11 @@ export async function importClaudeMemoryDir(db: DB, dir: string): Promise<{ impo
     const type = fm['metadata.type'] || fm.type || 'project';
     const kind = typeMap[type] || 'fact';
     const name = fm.name || basename(f, '.md');
+    const tomb = db.prepare("select 1 from memories where key = ? and status = 'deleted' and not exists (select 1 from memories m2 where m2.key = memories.key and m2.status = 'active') limit 1").get(`claude-memory:${name}`);
+    if (tomb) {
+      skipped++;
+      continue;
+    }
     const text = body.length > 7800 ? clip(body, 7800) : body;
     const r = await writeMemory(db, {
       body: text,

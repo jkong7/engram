@@ -61,6 +61,9 @@ export function buildDigest(db: DB, opts: DigestOptions): Digest {
   const project = scope !== 'global' ? all.filter((m) => m.scope !== 'global' && ['decision', 'fact', 'reference'].includes(m.kind)).sort(byPri) : [];
   const pinned = all.filter((m) => m.pinned && !['profile', 'preference', 'procedure'].includes(m.kind) && !project.includes(m)).sort(byPri);
   const procedures = all.filter((m) => m.kind === 'procedure').sort(byPri);
+  const recentEpisodes = scope !== 'global'
+    ? (db.prepare("select * from memories where status = 'active' and kind = 'episode' and scope = ? and sensitive = 0 order by updated_at desc limit 3").all(scope) as Record<string, unknown>[]).map(rowToMemory)
+    : [];
   const recentDecisions = all.filter((m) => m.kind === 'decision' && m.scope === 'global' && daysBetween(m.updated_at) < 21 && !m.pinned).sort(byPri);
   const keyFacts = all.filter((m) => m.scope === 'global' && (m.kind === 'fact' || m.kind === 'reference' || (m.kind === 'decision' && !recentDecisions.includes(m))) && !m.pinned && m.importance >= 4).sort(byPri);
   sections.push({ title: 'About the user', items: profile, render: (m) => line(m, 320), share: 0.32 });
@@ -69,6 +72,8 @@ export function buildDigest(db: DB, opts: DigestOptions): Digest {
   if (project.length) sections.push({ title: `This project (${scopeLabel(scope)})`, items: project, render: (m) => line(m, 220), share: 0.2 });
   if (recentDecisions.length) sections.push({ title: 'Recent decisions', items: recentDecisions, render: (m) => line(m, 200), share: 0.1 });
   if (keyFacts.length) sections.push({ title: 'Key facts', items: keyFacts, render: (m) => line(m, 200), share: 0.12 });
+  if (recentEpisodes.length)
+    sections.push({ title: 'Recent sessions here (memory_get for details)', items: recentEpisodes, render: (m) => `- ${m.updated_at.slice(0, 10)}: ${sanitizeForPrompt(m.title)} [${m.id}]`, share: 0.06 });
   if (procedures.length)
     sections.push({ title: 'Procedures (load with memory_get before doing these)', items: procedures, render: (m) => `- ${sanitizeForPrompt(m.title)} [${m.id}]`, share: 0.08 });
 
@@ -121,7 +126,7 @@ export function buildDigest(db: DB, opts: DigestOptions): Digest {
   if (truncated) body += `\n(${truncated} more memories not shown to save context; use memory_search.)\n`;
   const text = `<engram-memory scope="${scope}">\n${HEADER}\n${body}</engram-memory>`;
   if (opts.record !== false && ids.length) {
-    const partial = ids.filter((id) => text.includes(`(more: memory_get ${id})`) || procedures.some((m) => m.id === id));
+    const partial = ids.filter((id) => text.includes(`(more: memory_get ${id})`) || procedures.some((m) => m.id === id) || recentEpisodes.some((m) => m.id === id));
     const full = ids.filter((id) => !partial.includes(id));
     recordInjection(db, opts.sessionKey ?? null, full, opts.via || 'digest');
     recordInjection(db, opts.sessionKey ?? null, partial, 'digest-partial');

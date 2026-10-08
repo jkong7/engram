@@ -139,6 +139,18 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
     }
   }
 
+  const hint = parseTimeHint(opts.query);
+  const timeBoosted = new Set<string>();
+  if (hint.since && (!opts.kinds || opts.kinds.includes('episode'))) {
+    const eps = db
+      .prepare(`select * from memories where kind = 'episode' and status in (${statuses.map(() => '?').join(',')}) and updated_at >= ? and created_at < ? order by updated_at desc limit 8`)
+      .all(...statuses, hint.since, hint.until || '9999') as Record<string, unknown>[];
+    for (const r of eps) {
+      const m = rowToMemory(r);
+      if (!rows.has(m.id)) rows.set(m.id, m);
+      timeBoosted.add(m.id);
+    }
+  }
   const floor = opts.floor ?? (mode === 'recall' ? cfg.recallFloor : cfg.searchFloor);
   const hits: Hit[] = [];
   for (const m of rows.values()) {
@@ -166,6 +178,10 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
       if (c !== null && c >= floor) pass = true;
       if (ranksLex.has(m.id) && matched >= 1) pass = true;
     }
+    if (timeBoosted.has(m.id)) {
+      pass = true;
+      why.push('in-time-range');
+    }
     if (!pass) continue;
     let rrf = 0;
     const rl = ranksLex.get(m.id);
@@ -179,6 +195,7 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
       why.push(`semantic#${rv}`);
     }
     if (!rl && !rv) rrf = 1 / 200;
+    if (timeBoosted.has(m.id)) rrf += 1 / 62;
     const scopeW = scopeMatches(m.scope, active);
     const impW = 1 + 0.04 * (m.importance - 5);
     const trustW = 0.9 + 0.05 * TRUST_RANK[m.trust];
@@ -196,7 +213,7 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
   const rel = mode === 'recall' ? 0.45 : 0.4;
   const topCos = Math.max(-1, ...hits.map((h) => h.cos ?? -1));
   const gap = opts.gap ?? (mode === 'recall' ? Number(process.env.ENGRAM_RECALL_GAP || 0.07) : 0.16);
-  const kept = hits.filter((h) => h.score >= top * rel && (h.cos === null || topCos < 0 || h.cos >= topCos - gap || h.coverage >= 0.6));
+  const kept = hits.filter((h) => timeBoosted.has(h.memory.id) || (h.score >= top * rel && (h.cos === null || topCos < 0 || h.cos >= topCos - gap || h.coverage >= 0.6)));
   return mmr(kept.slice(0, limit * 4), limit, 0.72);
 }
 
