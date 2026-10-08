@@ -42,7 +42,7 @@ function defaults(home: string): EngramConfig {
     recallBudget: 700,
     bodyMaxChars: 2000,
     nearDuplicate: 0.92,
-    recallFloor: 0.62,
+    recallFloor: 0.64,
     searchFloor: 0.45,
     embed: { enabled: true, model: 'Xenova/bge-small-en-v1.5', dims: 384, pooling: 'cls' },
     llm: { provider: 'auto', maxExtractionsPerHour: 20, timeoutMs: 180000 },

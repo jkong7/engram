@@ -529,7 +529,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     case 'eval': {
       const { runEval } = await import('./eval.ts');
-      return runEval({ json, verbose: !!a.flags.verbose });
+      await runEval({ json, verbose: !!a.flags.verbose, sweep: str(a.flags, 'sweep')?.split(',').map(Number) });
+      return;
     }
     default:
       console.log(`unknown command: ${cmd}\n`);

@@ -132,6 +132,7 @@ export interface RecallOptions {
   record?: boolean;
   embedMode?: EmbedMode;
   excludeDigest?: boolean;
+  floor?: number;
 }
 
 export interface Recall {
@@ -153,6 +154,7 @@ export async function buildRecall(db: DB, prompt: string, opts: RecallOptions): 
     limit: opts.items ?? cfg.recallItems,
     exclude,
     embedMode: opts.embedMode,
+    floor: opts.floor,
   });
   const budget = opts.budget ?? cfg.recallBudget;
   const lines: string[] = [];

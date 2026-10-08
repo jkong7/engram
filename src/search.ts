@@ -19,6 +19,7 @@ export interface SearchOptions {
   embedMode?: EmbedMode;
   floor?: number;
   queryVector?: Float32Array | null;
+  gap?: number;
 }
 
 export interface Hit {
@@ -193,7 +194,9 @@ export async function searchMemories(db: DB, opts: SearchOptions): Promise<Hit[]
   hits.sort((a, b) => b.score - a.score);
   const top = hits[0]?.score ?? 0;
   const rel = mode === 'recall' ? 0.45 : 0.4;
-  const kept = hits.filter((h) => h.score >= top * rel);
+  const topCos = Math.max(-1, ...hits.map((h) => h.cos ?? -1));
+  const gap = opts.gap ?? (mode === 'recall' ? Number(process.env.ENGRAM_RECALL_GAP || 0.07) : 0.16);
+  const kept = hits.filter((h) => h.score >= top * rel && (h.cos === null || topCos < 0 || h.cos >= topCos - gap || h.coverage >= 0.6));
   return mmr(kept.slice(0, limit * 4), limit, 0.72);
 }
 
