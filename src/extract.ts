@@ -123,7 +123,7 @@ async function relatedMemories(db: DB, scope: string, turns: { role: string; tex
   return [...out.values()].filter((m) => m.kind !== 'episode').slice(0, 70);
 }
 
-export async function extractSession(db: DB, key: string, opts: { force?: boolean; provider?: Provider | null; dryRun?: boolean } = {}): Promise<ExtractResult> {
+export async function extractSession(db: DB, key: string, opts: { force?: boolean; provider?: Provider | null; dryRun?: boolean; background?: boolean } = {}): Promise<ExtractResult> {
   const cfg = loadConfig();
   const s = db.prepare('select * from sessions where key = ?').get(key) as Record<string, any> | undefined;
   if (!s) return { session: key, status: 'skipped', reason: 'unknown session', applied: [] };
@@ -138,7 +138,7 @@ export async function extractSession(db: DB, key: string, opts: { force?: boolea
   }
   const provider = opts.provider !== undefined ? opts.provider : await resolveProvider();
   if (!provider) return { session: key, status: 'deferred', reason: 'no LLM provider configured', applied: [] };
-  if (!opts.force && !underRateLimit(db)) return { session: key, status: 'deferred', reason: 'hourly LLM budget used', applied: [] };
+  if (opts.background && !opts.force && !underRateLimit(db)) return { session: key, status: 'deferred', reason: 'hourly LLM budget used', applied: [] };
   const context = startIdx > 0 ? all.slice(Math.max(0, startIdx - 4), startIdx) : [];
   const turns = [...context, ...fresh];
   const scope = s.scope as string;
