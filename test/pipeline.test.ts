@@ -175,6 +175,10 @@ describe('jobs', () => {
     assert.equal(row.status, 'queued');
     assert.equal(row.last_error, 'boom');
     assert.ok(Date.parse(row.run_after) > Date.now());
+    enqueue(db, 'extract', 'k2', {}, 0);
+    const crashed = claim(db, ['extract'], -1000)!;
+    const recovered = claim(db, ['extract'])!;
+    assert.equal(recovered.key, crashed.key);
     h.cleanup();
   });
 });

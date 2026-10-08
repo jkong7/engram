@@ -8,6 +8,7 @@
   "engines": { "node": ">=23.6" },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "bench": "node bench/search-latency.ts && bash bench/concurrent-writers.sh",
     "typecheck": "tsc -p tsconfig.json",
     "start": "node src/cli.ts daemon run"
   },
