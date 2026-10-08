@@ -341,6 +341,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
   mkdirSync(paths().home, { recursive: true });
   writeFileSync(paths().pid, String(process.pid));
   log('daemon listening', `${cfg.host}:${port}`, 'pid', process.pid);
+  let remote: { close: () => Promise<void>; port: number } | null = null;
+  if (cfg.remote.enabled) {
+    try {
+      const { startRemote } = await import('./remote.ts');
+      remote = await startRemote(db);
+      log('remote listener', `127.0.0.1:${remote.port}`, cfg.remote.publicUrl || '(no public url set)');
+    } catch (err) {
+      log('remote listener failed', (err as Error).message);
+    }
+  }
   void getEmbedder().then((e) => log('embedder', e ? 'ready' : 'unavailable'));
   const timers: NodeJS.Timeout[] = [];
   let stopping = false;
@@ -387,6 +397,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
     close: async () => {
       stopping = true;
       timers.forEach(clearInterval);
+      if (remote) await remote.close();
       await new Promise<void>((r) => server.close(() => r()));
       server.closeAllConnections?.();
       try {

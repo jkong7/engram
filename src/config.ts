@@ -25,6 +25,7 @@ export interface EngramConfig {
   mirror: { enabled: boolean; git: boolean };
   backups: { keep: number };
   excludeCwds: string[];
+  remote: { enabled: boolean; port: number; publicUrl: string; allowWrite: boolean; allowForget: boolean };
 }
 
 export function engramHome(): string {
@@ -52,6 +53,7 @@ function defaults(home: string): EngramConfig {
     mirror: { enabled: true, git: true },
     backups: { keep: 14 },
     excludeCwds: [join(home, 'work')],
+    remote: { enabled: false, port: 7433, publicUrl: '', allowWrite: true, allowForget: false },
   };
 }
 

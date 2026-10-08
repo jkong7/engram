@@ -140,6 +140,36 @@ const MIGRATIONS: string[] = [
     primary key (session_key, memory_id)
   );
   `,
+  `
+  create table oauth_clients (
+    client_id text primary key,
+    client_secret_hash text,
+    client_name text,
+    redirect_uris text not null,
+    created_at text not null
+  );
+  create table oauth_codes (
+    code_hash text primary key,
+    client_id text not null,
+    redirect_uri text not null,
+    challenge text not null,
+    scope text,
+    resource text,
+    expires_at text not null,
+    used integer not null default 0
+  );
+  create table oauth_tokens (
+    token_hash text primary key,
+    kind text not null,
+    client_id text not null,
+    scope text,
+    expires_at text not null,
+    revoked integer not null default 0,
+    created_at text not null,
+    last_used text
+  );
+  create index oauth_tokens_client on oauth_tokens(client_id);
+  `,
 ];
 
 const opened = new Map<string, DB>();

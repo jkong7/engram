@@ -254,6 +254,7 @@ Integration
   engram install <claude-code|codex|cursor|gemini|opencode|hermes|claude-desktop|launchd|path|all> [--dry-run]
   engram uninstall <harness>                        engram doctor
   engram daemon start|stop|restart|status|run|logs  engram ui
+  engram remote enable [--public-url URL] | disable | status | revoke | passphrase [--rotate]
 
 Data
   engram import claude-memory [DIR] | engram import json FILE | engram export [--out FILE]
@@ -548,6 +549,33 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const cfg = loadConfig(true);
       if (sub === 'get' && a._[2]) return console.log(JSON.stringify(a._[2].split('.').reduce((o: any, k) => o?.[k], cfg)));
       return console.log(JSON.stringify(cfg, null, 2));
+    }
+    case 'remote': {
+      const sub = a._[1] || 'status';
+      const r = await import('./remote.ts');
+      const cfg = loadConfig();
+      if (sub === 'enable') {
+        const url = str(a.flags, 'public-url') || cfg.remote.publicUrl;
+        saveConfigPatch({ remote: { enabled: true, ...(url ? { publicUrl: url } : {}) } });
+        const pass = r.remotePassphrase();
+        await cmdDaemon({ _: ['daemon', 'restart'], flags: {} });
+        console.log(`\nRemote MCP listener on http://127.0.0.1:${cfg.remote.port} (OAuth protected, forget disabled).`);
+        console.log(`Passphrase for the consent page: ${pass}`);
+        console.log(`\nExpose it over HTTPS, for example:\n  cloudflared tunnel --url http://127.0.0.1:${cfg.remote.port}\n  tailscale funnel ${cfg.remote.port}`);
+        console.log(`Then: engram remote enable --public-url https://YOUR-HOST and add https://YOUR-HOST/mcp as a custom connector in claude.ai (Settings > Connectors) or ChatGPT (developer mode).`);
+        return;
+      }
+      if (sub === 'disable') {
+        saveConfigPatch({ remote: { enabled: false } });
+        await cmdDaemon({ _: ['daemon', 'restart'], flags: {} });
+        return console.log('Remote listener disabled.');
+      }
+      if (sub === 'revoke') return console.log(`Revoked ${r.revokeAll(db)} token(s).`);
+      if (sub === 'passphrase') return console.log(r.remotePassphrase(!!a.flags.rotate));
+      const st = r.remoteStatus(db);
+      console.log(`remote ${cfg.remote.enabled ? 'enabled' : 'disabled'} on 127.0.0.1:${cfg.remote.port}${cfg.remote.publicUrl ? ' as ' + cfg.remote.publicUrl : ''}; writes ${cfg.remote.allowWrite ? 'on' : 'off'}, forget ${cfg.remote.allowForget ? 'on' : 'off'}`);
+      console.log(`clients ${st.clients.length}, live tokens ${st.tokens.length}`);
+      return;
     }
     case 'eval': {
       const { runEval } = await import('./eval.ts');
