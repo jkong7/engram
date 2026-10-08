@@ -446,3 +446,69 @@ describe('operations', () => {
     h.cleanup();
   });
 });
+
+describe('access control', () => {
+  let h: ReturnType<typeof freshHome>;
+  let close: () => Promise<void>;
+  let base: string;
+  let keys: Record<string, string> = {};
+  before(async () => {
+    h = freshHome(false);
+    const { startDaemon } = await import('../src/server.ts');
+    const { createKey, resetAuthState } = await import('../src/auth.ts');
+    resetAuthState();
+    keys.reader = createKey(h.db, 'reader', ['read']).key;
+    keys.writer = createKey(h.db, 'writer', ['read', 'write']).key;
+    keys.teamA = createKey(h.db, 'team-a', ['read', 'write'], 'team-a').key;
+    const d = await startDaemon({ db: h.db, jobs: false });
+    close = d.close;
+    base = `http://127.0.0.1:${d.port}`;
+  });
+  after(async () => {
+    await close();
+    h.cleanup();
+  });
+  const call = (key: string, path: string, init: RequestInit = {}) => fetch(base + path, { ...init, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', ...(init.headers || {}) } });
+
+  test('scopes are enforced per route', async () => {
+    assert.equal((await call(keys.reader, '/v1/stats')).status, 200);
+    assert.equal((await call(keys.reader, '/v1/memories', { method: 'POST', body: JSON.stringify({ text: 'reader cannot write this' }) })).status, 403);
+    assert.equal((await call(keys.writer, '/v1/memories', { method: 'POST', body: JSON.stringify({ text: 'Writer key saved this team fact about Kubernetes.' }) })).status, 200);
+    assert.equal((await call(keys.writer, '/v1/maintain', { method: 'POST', body: '{}' })).status, 403);
+    assert.equal((await call('ek_bogus', '/v1/stats')).status, 401);
+  });
+
+  test('read-only keys get an MCP server without write tools', async () => {
+    const headers = { accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' };
+    await call(keys.reader, '/mcp', { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }) });
+    const list = await (await call(keys.reader, '/mcp', { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) })).text();
+    assert.match(list, /memory_search/);
+    assert.ok(!list.includes('memory_write'));
+  });
+
+  test('tenants are isolated in separate databases', async () => {
+    const w = await (await call(keys.teamA, '/v1/memories', { method: 'POST', body: JSON.stringify({ text: 'Team A deploys with ArgoCD on Fridays.' }) })).json();
+    assert.equal(w.status, 'created');
+    const mine = await (await call(keys.writer, '/v1/search', { method: 'POST', body: JSON.stringify({ query: 'ArgoCD deploys' }) })).json();
+    assert.equal(mine.memories.length, 0, JSON.stringify(mine));
+    const theirs = await (await call(keys.teamA, '/v1/search', { method: 'POST', body: JSON.stringify({ query: 'ArgoCD deploys' }) })).json();
+    assert.equal(theirs.memories.length, 1);
+    const leak = await (await call(keys.teamA, '/v1/search', { method: 'POST', body: JSON.stringify({ query: 'Kubernetes' }) })).json();
+    assert.equal(leak.memories.length, 0);
+  });
+
+  test('revoked keys stop working and rate limits apply', async () => {
+    const { revokeKey, createKey, resetAuthState } = await import('../src/auth.ts');
+    revokeKey(h.db, 'writer');
+    assert.equal((await call(keys.writer, '/v1/stats')).status, 401);
+    resetAuthState();
+    process.env.ENGRAM_RATE = '1';
+    process.env.ENGRAM_BURST = '3';
+    const k = createKey(h.db, 'burst', ['read']).key;
+    const codes = [];
+    for (let i = 0; i < 6; i++) codes.push((await call(k, '/v1/stats')).status);
+    delete process.env.ENGRAM_RATE;
+    delete process.env.ENGRAM_BURST;
+    assert.ok(codes.includes(429), codes.join(','));
+  });
+});

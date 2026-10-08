@@ -256,6 +256,7 @@ Integration
   engram uninstall <harness>                        engram doctor
   engram daemon start|stop|restart|status|run|logs  engram ui
   engram remote enable [--public-url URL] | disable | status | revoke | passphrase [--rotate]
+  engram keys create NAME [--scopes read,write,admin] [--tenant T] | list | revoke ID
 
 Data
   engram import claude-memory [DIR] | engram import json FILE | engram export [--out FILE]
@@ -485,6 +486,19 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     case 'consolidate':
       return console.log(JSON.stringify(await consolidate(db, { dryRun: !!a.flags['dry-run'] }), null, 2));
+    case 'keys': {
+      const auth = await import('./auth.ts');
+      const sub = a._[1] || 'list';
+      if (sub === 'create') {
+        const name = a._[2] || 'key';
+        const scopes = (str(a.flags, 'scopes') || 'read,write').split(',').map((x) => x.trim()) as never;
+        const r = auth.createKey(db, name, scopes, str(a.flags, 'tenant') || 'default');
+        return console.log(`created ${r.id} (${name}, scopes ${str(a.flags, 'scopes') || 'read,write'}, tenant ${str(a.flags, 'tenant') || 'default'})\n${r.key}\nShown once. Use it as: Authorization: Bearer <key>`);
+      }
+      if (sub === 'revoke') return console.log(auth.revokeKey(db, a._[2]) ? `revoked ${a._[2]}` : 'no such key');
+      for (const k of auth.listKeys(db)) console.log(`${k.id}  ${k.name}  scopes=${k.scopes}  tenant=${k.tenant}  ${k.revoked ? 'REVOKED' : 'active'}  last used ${k.last_used || 'never'}`);
+      return;
+    }
     case 'sources': {
       const sub = a._[1] || 'list';
       const cfg = loadConfig(true);

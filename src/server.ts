@@ -22,6 +22,7 @@ import { getMeta, setMeta } from './db.ts';
 import { nowIso } from './util.ts';
 import { uiHtml } from './ui.ts';
 import { writeLog, ensureHealthyDb, metricsText, count, observe, applyRetention } from './ops.ts';
+import { authenticate, requiredScope, rateLimited, dbFor, createKey, listKeys, revokeKey, type Scope } from './auth.ts';
 
 const startedAt = Date.now();
 
@@ -106,9 +107,19 @@ export interface DaemonOptions {
   quiet?: boolean;
 }
 
-export function createHttpHandler(db: DB) {
-  const mcp = createMcpHandler(() => createMcpServer({ db, harness: 'http' }), { legacy: 'stateless' });
+export function createHttpHandler(rootDb: DB) {
+  const mcpHandlers = new Map<string, ReturnType<typeof createMcpHandler>>();
+  const mcpFor = (tenant: string, db: DB, readOnly: boolean, allowForget: boolean) => {
+    const k = `${tenant}|${readOnly}|${allowForget}`;
+    let h = mcpHandlers.get(k);
+    if (!h) {
+      h = createMcpHandler(() => createMcpServer({ db, harness: 'http', readOnly, allowForget }), { legacy: 'stateless' });
+      mcpHandlers.set(k, h);
+    }
+    return h;
+  };
   return async (req: IncomingMessage, res: ServerResponse) => {
+    let db = rootDb;
     try {
       if (!hostOk(req)) return send(res, 403, { error: 'forbidden host or origin' });
       const url = new URL(req.url || '/', 'http://localhost');
@@ -126,7 +137,14 @@ export function createHttpHandler(db: DB) {
       }
       const qToken = url.searchParams.get('token') || undefined;
       const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || undefined;
-      const authed = tokenOk(bearer) || tokenOk(cookieToken(req)) || tokenOk(qToken);
+      const principal = authenticate(rootDb, bearer) || authenticate(rootDb, cookieToken(req)) || authenticate(rootDb, qToken);
+      const authed = !!principal;
+      if (principal && rateLimited(principal.keyId || 'owner')) return send(res, 429, { error: 'rate limited' });
+      if (principal) {
+        const need = requiredScope(req.method || 'GET', path);
+        if (!principal.scopes.has(need)) return send(res, 403, { error: `this key lacks the ${need} scope` });
+        db = dbFor(rootDb, principal.tenant);
+      }
       if (path === '/' && req.method === 'GET') {
         if (!authed) return send(res, 401, '<p>Open with <code>engram ui</code> (it adds the token).</p>', 'text/html');
         const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
@@ -136,8 +154,18 @@ export function createHttpHandler(db: DB) {
       }
       if (!authed) return send(res, 401, { error: 'missing or bad bearer token (see ~/.engram/token)' });
       const body = req.method === 'GET' || req.method === 'HEAD' ? Buffer.alloc(0) : await readBody(req);
-      if (path === '/mcp') return pipeWebResponse(res, await mcp.fetch(await toWebRequest(req, body)));
       const json = () => (body.length ? JSON.parse(body.toString('utf8')) : {});
+      if (path === '/mcp') {
+        const mcp = mcpFor(principal!.tenant, db, !principal!.scopes.has('write'), principal!.scopes.has('admin'));
+        return pipeWebResponse(res, await mcp.fetch(await toWebRequest(req, body)));
+      }
+      if (path === '/v1/keys' && req.method === 'GET') return send(res, 200, { keys: listKeys(rootDb) });
+      if (path === '/v1/keys' && req.method === 'POST') {
+        const b = json();
+        return send(res, 201, createKey(rootDb, String(b.name || 'key'), (b.scopes || ['read']) as Scope[], b.tenant || 'default'));
+      }
+      const keyDel = path.match(/^\/v1\/keys\/([^/]+)$/);
+      if (keyDel && req.method === 'DELETE') return send(res, 200, { revoked: revokeKey(rootDb, keyDel[1]) });
       const hook = path.match(/^\/v1\/hooks\/([^/]+)\/([^/]+)$/);
       if (hook && req.method === 'POST') {
         const t0 = performance.now();
@@ -310,6 +338,14 @@ function scheduleIdleExtractions(db: DB): number {
   return rows.length;
 }
 
+function tenantDbs(): DB[] {
+  const dir = join(paths().home, 'tenants');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((t) => existsSync(join(dir, t, 'engram.db')))
+    .map((t) => openDb(join(dir, t, 'engram.db')));
+}
+
 async function runOneJob(db: DB): Promise<boolean> {
   const job = claim(db);
   if (!job) return false;
@@ -404,6 +440,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
             const r = await importClaudeMemoryDir(db, dir);
             if (r.imported) log('claude memory sync', dir, r);
           }
+        }
+        for (const t of tenantDbs()) {
+          scheduleIdleExtractions(t);
+          for (let i = 0; i < 2 && !stopping; i++) if (!(await runOneJob(t))) break;
         }
         if (maintenanceDue(db, 'last_daily', 24 * 3600000)) {
           setMeta(db, 'last_daily', nowIso());

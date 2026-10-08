@@ -170,6 +170,18 @@ const MIGRATIONS: string[] = [
   );
   create index oauth_tokens_client on oauth_tokens(client_id);
   `,
+  `
+  create table api_keys (
+    id text primary key,
+    name text not null,
+    key_hash text not null unique,
+    scopes text not null,
+    tenant text not null default 'default',
+    created_at text not null,
+    last_used text,
+    revoked integer not null default 0
+  );
+  `,
 ];
 
 const opened = new Map<string, DB>();
