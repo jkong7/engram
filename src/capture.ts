@@ -347,3 +347,58 @@ export function sessionTurns(db: DB, key: string, fromTurn = 0): { id: number; r
     ts: string;
   }[];
 }
+
+export function opencodeDbPath(): string {
+  return process.env.ENGRAM_OPENCODE_DB || process.env.OPENCODE_DB || join(homedir(), '.local', 'share', 'opencode', 'opencode.db');
+}
+
+export async function ingestOpencode(db: DB, opts: { maxAgeDays?: number } = {}): Promise<{ sessions: string[]; added: number }> {
+  const path = opencodeDbPath();
+  if (!existsSync(path)) return { sessions: [], added: 0 };
+  const { DatabaseSync } = await import('node:sqlite');
+  let src: import('node:sqlite').DatabaseSync;
+  try {
+    src = new DatabaseSync(path, { readOnly: true, timeout: 3000 });
+  } catch {
+    return { sessions: [], added: 0 };
+  }
+  const out = new Set<string>();
+  let added = 0;
+  try {
+    const cursorRow = db.prepare("select v from meta where k = 'opencode_cursor'").get() as { v: string } | undefined;
+    const floor = Date.now() - (opts.maxAgeDays ?? loadConfig().ingest.maxAgeDays) * 86400000;
+    const cursor = Math.max(Number(cursorRow?.v || 0), floor);
+    const sessions = src.prepare('select id, parent_id, directory, title, time_updated from session where time_updated > ? order by time_updated').all(cursor) as { id: string; parent_id: string | null; directory: string; title: string; time_updated: number }[];
+    let maxSeen = cursor;
+    for (const s of sessions) {
+      maxSeen = Math.max(maxSeen, s.time_updated);
+      if (s.parent_id || isExcludedCwd(s.directory)) continue;
+      const rows = src
+        .prepare(`select json_extract(m.data, '$.role') role, p.data pdata, m.time_created ts from message m join part p on p.message_id = m.id where m.session_id = ? order by m.time_created, p.id`)
+        .all(s.id) as { role: string; pdata: string; ts: number }[];
+      const byMsg: Turn[] = [];
+      for (const r of rows) {
+        let part: Record<string, any>;
+        try {
+          part = JSON.parse(r.pdata);
+        } catch {
+          continue;
+        }
+        if (part.type !== 'text' || part.synthetic || !part.text) continue;
+        if (r.role !== 'user' && r.role !== 'assistant') continue;
+        byMsg.push({ role: r.role, text: part.text, ts: new Date(r.ts).toISOString() });
+      }
+      if (byMsg.some((t) => t.text.includes(EXTRACTION_MARKER))) continue;
+      const key = touchSession(db, { harness: 'opencode', sessionId: s.id, cwd: s.directory, title: s.title, live: false });
+      const n = addTurns(db, key, 'opencode', byMsg);
+      if (n) {
+        added += n;
+        out.add(key);
+      }
+    }
+    db.prepare("insert into meta(k, v) values ('opencode_cursor', ?) on conflict(k) do update set v = excluded.v").run(String(maxSeen));
+  } finally {
+    src.close();
+  }
+  return { sessions: [...out], added };
+}

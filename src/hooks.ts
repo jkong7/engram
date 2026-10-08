@@ -147,6 +147,10 @@ export async function handleHook(db: DB, harnessIn: string, event: string, input
   const scope = scopeForCwd(c.cwd);
   const canParse = !!(c.transcriptPath && PARSERS[c.harness] && existsSync(c.transcriptPath));
   const ingest = () => {
+    if (c.harness === 'opencode') {
+      void import('./capture.ts').then((m) => m.ingestOpencode(db)).catch(() => {});
+      return 0;
+    }
     if (!canParse) return 0;
     try {
       return ingestTranscript(db, c.harness, c.transcriptPath!, { sessionId: c.sessionId, cwd: c.cwd }).added;

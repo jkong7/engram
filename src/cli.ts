@@ -461,7 +461,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         return console.log(JSON.stringify(r));
       }
       const r = scanTranscripts(db, { maxAgeDays: num(a.flags, 'days'), harnesses: str(a.flags, 'harness')?.split(',') });
-      return console.log(`scanned ${r.files} changed transcripts, added ${r.added} turns across ${r.sessions.length} sessions`);
+      const oc = await (await import('./capture.ts')).ingestOpencode(db, { maxAgeDays: num(a.flags, 'days') });
+      return console.log(`scanned ${r.files} changed transcripts, added ${r.added + oc.added} turns across ${r.sessions.length + oc.sessions.length} sessions`);
     }
     case 'extract': {
       const provider = await resolveProvider();

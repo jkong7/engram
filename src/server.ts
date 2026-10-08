@@ -13,7 +13,7 @@ import { searchMemories, searchConversations } from './search.ts';
 import { writeMemory, updateMemory, forgetMemories, getMemory, listMemories, publicMemory, approvePending, rejectPending, recentOps, undoOp, stats, backfillEmbeddings, restoreMemory, history, recordAccess } from './store.ts';
 import { embedLocal, setEmbedMode, getEmbedder, embedModelName, localEmbedderLoaded } from './embed.ts';
 import { scopeForCwd, normalizeScope } from './scope.ts';
-import { touchSession, addTurns, endSession, scanTranscripts } from './capture.ts';
+import { touchSession, addTurns, endSession, scanTranscripts, ingestOpencode } from './capture.ts';
 import { enqueue, claim, complete, fail, defer, pruneJobs } from './jobs.ts';
 import { extractSession } from './extract.ts';
 import { consolidate, decay, writeMirror, backup, maintenanceDue, importClaudeMemoryDir } from './maintain.ts';
@@ -371,6 +371,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
           const r = scanTranscripts(db);
           setMeta(db, 'last_scan', nowIso());
           if (r.added) log('scan', r);
+          const oc = await ingestOpencode(db);
+          if (oc.added) log('opencode ingest', oc);
         }
         scheduleIdleExtractions(db);
         if (maintenanceDue(db, 'last_embed', 60000)) {
