@@ -295,7 +295,8 @@ export const EngramPlugin = async ({ directory }) => {
       const ctx = res && (res.context || res.additionalContext);
       if (ctx) {
         digests.set(sessionID, true);
-        output.parts.push({ type: "text", text: ctx, synthetic: true });
+        const base = (output.parts[0] && output.parts[0].id) || "prt_" + Date.now().toString(16);
+        output.parts.push({ id: base + "m", sessionID, messageID: output.message.id, type: "text", text: ctx, synthetic: true });
       }
     },
     "experimental.session.compacting": async (input, output) => {
