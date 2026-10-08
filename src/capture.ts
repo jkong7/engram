@@ -22,6 +22,7 @@ export interface SessionInfo {
   cwd?: string | null;
   transcriptPath?: string | null;
   title?: string | null;
+  live?: boolean;
 }
 
 export function sessionKey(harness: string, sessionId: string): string {
@@ -43,13 +44,13 @@ export function touchSession(db: DB, s: SessionInfo): string {
     `insert into sessions (key, harness, session_id, cwd, scope, title, started_at, last_seen_at, transcript_path)
      values (?,?,?,?,?,?,?,?,?)
      on conflict(key) do update set
-       last_seen_at = excluded.last_seen_at,
+       last_seen_at = case when ? then excluded.last_seen_at else sessions.last_seen_at end,
        cwd = coalesce(excluded.cwd, sessions.cwd),
        scope = case when excluded.cwd is not null then excluded.scope else sessions.scope end,
        title = coalesce(sessions.title, excluded.title),
        transcript_path = coalesce(excluded.transcript_path, sessions.transcript_path),
        ended_at = null`,
-  ).run(key, s.harness, s.sessionId, s.cwd ?? null, scope, s.title ?? null, now, now, s.transcriptPath ?? null);
+  ).run(key, s.harness, s.sessionId, s.cwd ?? null, scope, s.title ?? null, now, now, s.transcriptPath ?? null, s.live === false ? 0 : 1);
   return key;
 }
 
@@ -83,7 +84,12 @@ export function addTurns(db: DB, key: string, harness: string, turns: Turn[]): n
       const res = ins.run(key, harness, t.role, text, t.ts || nowIso(), sha(`${t.role}|${text}`));
       if (res.changes) added++;
     }
-    if (added) db.prepare('update sessions set turn_count = turn_count + ?, last_seen_at = ? where key = ?').run(added, nowIso(), key);
+    if (added) {
+      const stamps = turns.map((t) => t.ts).filter((x): x is string => !!x && !isNaN(Date.parse(x))).sort();
+      const first = stamps[0] || nowIso();
+      const last = stamps[stamps.length - 1] || nowIso();
+      db.prepare('update sessions set turn_count = turn_count + ?, last_seen_at = max(?, coalesce((select max(ts) from turns where session_key = ?), ?)), started_at = min(started_at, ?) where key = ?').run(added, last, key, last, first, key);
+    }
   });
   return added;
 }
@@ -263,11 +269,11 @@ export function ingestTranscript(db: DB, harness: string, path: string, hint: Pa
   const sessionId = hint.sessionId || meta.sessionId || path.split('/').pop()!.replace(/\.jsonl$/, '');
   const cwd = hint.cwd || meta.cwd || null;
   if (meta.internal || isExcludedCwd(cwd)) {
-    const key = touchSession(db, { harness, sessionId, cwd, transcriptPath: path, title: meta.title });
+    const key = touchSession(db, { harness, sessionId, cwd, transcriptPath: path, title: meta.title, live: false });
     db.prepare("update sessions set ingest_offset = ?, extract_state = 'skip' where key = ?").run(next, key);
     return { key, added: 0, skipped: 'internal session' };
   }
-  const key = touchSession(db, { harness, sessionId, cwd, transcriptPath: path, title: hint.title || meta.title });
+  const key = touchSession(db, { harness, sessionId, cwd, transcriptPath: path, title: hint.title || meta.title, live: false });
   if (meta.title) db.prepare('update sessions set title = ? where key = ? and (title is null or title = ?)').run(meta.title, key, '');
   const added = addTurns(db, key, harness, parsed.turns);
   db.prepare('update sessions set ingest_offset = ? where key = ?').run(next, key);
