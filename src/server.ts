@@ -363,6 +363,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<{ close: ()
         }
         if (maintenanceDue(db, 'last_mirror', 10 * 60000)) {
           writeMirror(db);
+          writeFileSync(join(paths().home, 'digest.md'), buildDigest(db, { scope: 'global', record: false }).text + '\n');
           setMeta(db, 'last_mirror', nowIso());
         }
         if (maintenanceDue(db, 'last_daily', 24 * 3600000)) {
