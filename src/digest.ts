@@ -61,12 +61,14 @@ export function buildDigest(db: DB, opts: DigestOptions): Digest {
   const project = scope !== 'global' ? all.filter((m) => m.scope !== 'global' && ['decision', 'fact', 'reference'].includes(m.kind)).sort(byPri) : [];
   const pinned = all.filter((m) => m.pinned && !['profile', 'preference', 'procedure'].includes(m.kind) && !project.includes(m)).sort(byPri);
   const procedures = all.filter((m) => m.kind === 'procedure').sort(byPri);
-  const recentDecisions = scope === 'global' ? all.filter((m) => m.kind === 'decision' && m.scope === 'global' && daysBetween(m.updated_at) < 21).sort(byPri) : [];
+  const recentDecisions = all.filter((m) => m.kind === 'decision' && m.scope === 'global' && daysBetween(m.updated_at) < 21 && !m.pinned).sort(byPri);
+  const keyFacts = all.filter((m) => m.scope === 'global' && (m.kind === 'fact' || m.kind === 'reference' || (m.kind === 'decision' && !recentDecisions.includes(m))) && !m.pinned && m.importance >= 4).sort(byPri);
   sections.push({ title: 'About the user', items: profile, render: (m) => line(m, 320), share: 0.32 });
   sections.push({ title: 'Preferences and standing rules', items: prefs, render: (m) => line(m, 260), share: 0.3 });
   if (pinned.length) sections.push({ title: 'Pinned', items: pinned, render: (m) => line(m, 240), share: 0.1 });
   if (project.length) sections.push({ title: `This project (${scopeLabel(scope)})`, items: project, render: (m) => line(m, 220), share: 0.2 });
   if (recentDecisions.length) sections.push({ title: 'Recent decisions', items: recentDecisions, render: (m) => line(m, 200), share: 0.1 });
+  if (keyFacts.length) sections.push({ title: 'Key facts', items: keyFacts, render: (m) => line(m, 200), share: 0.12 });
   if (procedures.length)
     sections.push({ title: 'Procedures (load with memory_get before doing these)', items: procedures, render: (m) => `- ${sanitizeForPrompt(m.title)} [${m.id}]`, share: 0.08 });
 
