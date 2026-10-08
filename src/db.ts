@@ -126,6 +126,7 @@ const MIGRATIONS: string[] = [
     run_after text not null,
     lease_until text,
     last_error text,
+    dirty integer not null default 0,
     created_at text not null,
     updated_at text not null
   );
