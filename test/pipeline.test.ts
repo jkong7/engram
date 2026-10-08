@@ -527,3 +527,19 @@ describe('mirror privacy', () => {
     h.cleanup();
   });
 });
+
+describe('structured hook detail', () => {
+  test('generic harnesses get recall ids, scores and gate; claude-code output stays unchanged', async () => {
+    const h = freshHome(false);
+    await writeMemory(h.db, { body: 'Sam keeps release notes in CHANGELOG.md at the repo root.', kind: 'fact' });
+    const loomOut = (await handleHook(h.db, 'loom', 'UserPromptSubmit', { session_id: 'l9', cwd: '/tmp', prompt: 'where are the release notes changelog kept' })).output as any;
+    assert.ok(loomOut.engram.recall.ids.length >= 1);
+    assert.equal(typeof loomOut.engram.recall.hits[0].score, 'number');
+    assert.ok(loomOut.engram.recall.gate);
+    const start = (await handleHook(h.db, 'loom', 'SessionStart', { session_id: 'l9b', cwd: '/tmp' })).output as any;
+    assert.ok(Array.isArray(start.engram.digest.ids));
+    const cc = (await handleHook(h.db, 'claude-code', 'SessionStart', { session_id: 'c9', cwd: '/tmp' })).output as any;
+    assert.equal(cc.engram, undefined);
+    h.cleanup();
+  });
+});

@@ -115,8 +115,14 @@ export function readContext(harnessIn: string, event: string, input: Input): Hoo
   };
 }
 
-function formatOutput(c: HookContext, context: string): unknown {
-  if (!context) return c.harness === 'hermes' || c.harness === 'generic' ? {} : null;
+export interface HookDetail {
+  digest?: { ids: string[]; tokens: number; truncated: number };
+  recall?: { ids: string[]; gate: string; hits: { id: string; title: string; kind: string; score: number; cos: number | null; why: string[] }[] };
+}
+
+function formatOutput(c: HookContext, context: string, detail?: HookDetail): unknown {
+  const extra = detail && (detail.digest || detail.recall) && !['claude-code', 'codex', 'gemini', 'cursor'].includes(c.harness) ? { engram: detail } : {};
+  if (!context) return c.harness === 'hermes' || c.harness === 'generic' ? { ...extra } : Object.keys(extra).length ? extra : null;
   switch (c.harness) {
     case 'claude-code':
     case 'codex':
@@ -126,9 +132,9 @@ function formatOutput(c: HookContext, context: string): unknown {
     case 'cursor':
       return c.phase === 'start' ? { additional_context: context } : null;
     case 'hermes':
-      return { context };
+      return { context, ...extra };
     default:
-      return { context, additionalContext: context };
+      return { context, additionalContext: context, ...extra };
   }
 }
 
@@ -137,6 +143,7 @@ export interface HookResult {
   context: string;
   sessionKey: string | null;
   note: string;
+  detail?: HookDetail;
 }
 
 export async function handleHook(db: DB, harnessIn: string, event: string, input: Input, opts: { embedMode?: EmbedMode } = {}): Promise<HookResult> {
@@ -163,7 +170,8 @@ export async function handleHook(db: DB, harnessIn: string, event: string, input
       if (c.source === 'compact' || c.source === 'clear') db.prepare('delete from injections where session_key = ?').run(key);
       if (c.source === 'resume') ingest();
       const d = buildDigest(db, { scope, sessionKey: key, via: 'digest', harness: c.harness });
-      return { output: formatOutput(c, d.text), context: d.text, sessionKey: key, note: `digest ${d.ids.length} items, ${d.tokens} tokens` };
+      const detail: HookDetail = { digest: { ids: d.ids, tokens: d.tokens, truncated: d.truncated } };
+      return { output: formatOutput(c, d.text, detail), context: d.text, sessionKey: key, note: `digest ${d.ids.length} items, ${d.tokens} tokens`, detail };
     }
     case 'prompt': {
       if (c.prompt) addTurns(db, key, c.harness, [{ role: 'user', text: c.prompt }]);
@@ -171,17 +179,20 @@ export async function handleHook(db: DB, harnessIn: string, event: string, input
       const fresh = (db.prepare("select count(*) n from injections where session_key = ? and via like 'digest%'").get(key) as { n: number }).n === 0;
       let context = '';
       let note = '';
+      const detail: HookDetail = {};
       if (fresh && (c.harness === 'hermes' || c.harness === 'generic' || c.harness === 'opencode' || c.harness === 'gemini') && input.include_digest !== false) {
         const d = buildDigest(db, { scope, sessionKey: key, via: 'digest', harness: c.harness });
         context = d.text;
         note = `digest ${d.ids.length}; `;
+        detail.digest = { ids: d.ids, tokens: d.tokens, truncated: d.truncated };
       }
       if (c.prompt) {
         const r = await buildRecall(db, c.prompt, { scope, sessionKey: key, embedMode: opts.embedMode });
         if (r.text) context = context ? `${context}\n\n${r.text}` : r.text;
         note += `recall ${r.ids.length} (${r.gate})`;
+        detail.recall = { ids: r.ids, gate: r.gate, hits: r.hits.map((h) => ({ id: h.memory.id, title: h.memory.title, kind: h.memory.kind, score: Number(h.score.toFixed(5)), cos: h.cos === null ? null : Number(h.cos.toFixed(3)), why: h.why })) };
       }
-      return { output: formatOutput(c, context), context, sessionKey: key, note };
+      return { output: formatOutput(c, context, detail), context, sessionKey: key, note, detail };
     }
     case 'turn_end': {
       let added = ingest();

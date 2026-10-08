@@ -229,7 +229,14 @@ export function createHttpHandler(rootDb: DB) {
         observe('hook', performance.now() - t0, { harness: hook[1], event: hook[2] });
         count('hook', { harness: hook[1], event: hook[2] });
         log('hook', hook[1], hook[2], r.note);
-        span?.set({ 'engram.note': r.note ? String(r.note).slice(0, 500) : undefined }).content('output.value', r.output ?? {});
+        span?.set({
+          'engram.note': r.note ? String(r.note).slice(0, 500) : undefined,
+          'engram.recall.ids': r.detail?.recall?.ids,
+          'engram.recall.hits': r.detail?.recall?.hits.length,
+          'engram.gate': r.detail?.recall?.gate,
+          'engram.digest.ids': r.detail?.digest?.ids,
+          'engram.digest.tokens': r.detail?.digest?.tokens,
+        }).content('output.value', r.output ?? {});
         return send(res, 200, r.output ?? {});
       }
       if (path === '/v1/context' && req.method === 'GET') {
@@ -237,7 +244,7 @@ export function createHttpHandler(rootDb: DB) {
         const sid = url.searchParams.get('session_id');
         const harness = url.searchParams.get('harness') || 'api';
         const key = sid ? touchSession(db, { harness, sessionId: sid, cwd }) : null;
-        const d = buildDigest(db, { scope: scopeForCwd(cwd), budget: Number(url.searchParams.get('budget')) || undefined, sessionKey: key, harness });
+        const d = buildDigest(db, { scope: scopeForCwd(cwd), budget: Number(url.searchParams.get('budget')) || undefined, sessionKey: key, harness, record: url.searchParams.get('dry_run') !== '1' });
         span?.set({ 'engram.scope': scopeForCwd(cwd) }).content('output.value', d.text);
         if (url.searchParams.get('format') === 'json') return send(res, 200, d);
         return send(res, 200, d.text, 'text/markdown; charset=utf-8');
@@ -246,9 +253,10 @@ export function createHttpHandler(rootDb: DB) {
         const b = json();
         const { buildRecall } = await import('./digest.ts');
         const key = b.session_id ? touchSession(db, { harness: b.harness || 'api', sessionId: b.session_id, cwd: b.cwd }) : null;
-        const r = await buildRecall(db, String(b.prompt || ''), { scope: scopeForCwd(b.cwd), sessionKey: key, embedMode: 'local' });
+        const dry = b.dry_run === true || b.dry_run === 1 || url.searchParams.get('dry_run') === '1';
+        const r = await buildRecall(db, String(b.prompt || ''), { scope: scopeForCwd(b.cwd), sessionKey: key, embedMode: 'local', record: !dry });
         span?.set({ 'engram.recall.ids': r.ids, 'engram.recall.hits': r.ids.length, 'engram.gate': typeof r.gate === 'string' ? r.gate : JSON.stringify(r.gate ?? null).slice(0, 500) }).content('output.value', r.text);
-        return send(res, 200, { context: r.text, ids: r.ids, gate: r.gate });
+        return send(res, 200, { context: r.text, ids: r.ids, gate: r.gate, hits: r.hits.map((h) => ({ id: h.memory.id, title: h.memory.title, kind: h.memory.kind, score: h.score, cos: h.cos, why: h.why })) });
       }
       if (path === '/v1/search' && req.method === 'POST') {
         const b = json();
