@@ -2,6 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshHome } from './helpers.ts';
 import { writeMemory, getMemory, updateMemory, forgetMemories, history, undoOp, approvePending, listMemories, inferKind, restoreMemory } from '../src/store.ts';
+import { loadConfig } from '../src/config.ts';
 import { searchMemories, recallGate, searchConversations } from '../src/search.ts';
 import { buildDigest, buildRecall } from '../src/digest.ts';
 import { redactSecrets, scanInjection } from '../src/safety.ts';
@@ -187,11 +188,25 @@ describe('store with local embeddings', () => {
     await writeMemory(db, { body: 'Sam never wants code comments or docstrings in code written for him.', kind: 'preference', embedMode: 'local' });
     await writeMemory(db, { body: 'Sam is into niche colognes and owns about 16 fragrances.', kind: 'profile', embedMode: 'local' });
     await writeMemory(db, { body: 'The onboarding-demo take-home is hosted on Google Cloud Run.', kind: 'fact', embedMode: 'local' });
-    const r = await buildRecall(db, 'should I add docstrings to this python function?', { scope: 'global', embedMode: 'local', record: false });
+    const r = await buildRecall(db, 'do I need to put docstrings or comments in this code?', { scope: 'global', embedMode: 'local', record: false });
     assert.ok(r.hits.length >= 1, 'expected a hit');
     assert.match(r.hits[0].memory.body, /comments/);
     const none = await buildRecall(db, 'what is the capital of Mongolia', { scope: 'global', embedMode: 'local', record: false });
     assert.equal(none.ids.length, 0, JSON.stringify(none.hits.map((x) => [x.memory.body, x.cos])));
+  });
+
+  test('recall floor is applied to the measured cosine', async () => {
+    await writeMemory(db, { body: 'Sam never wants code comments or docstrings in code written for him.', kind: 'preference', embedMode: 'local' });
+    const q = 'do I need to put docstrings or comments in this code?';
+    const open = await searchMemories(db, { query: q, scope: 'global', mode: 'recall', limit: 5, embedMode: 'local', floor: 0 });
+    const cos = open[0]?.cos;
+    assert.ok(typeof cos === 'number', 'expected a measured cosine');
+    // The default floor must leave real headroom for a plain paraphrase.
+    assert.ok(cos >= loadConfig().recallFloor + 0.05, `paraphrase cosine ${cos} too close to the default floor`);
+    const above = await searchMemories(db, { query: q, scope: 'global', mode: 'recall', limit: 5, embedMode: 'local', floor: cos + 0.2 });
+    assert.equal(above.length, 0);
+    const below = await searchMemories(db, { query: q, scope: 'global', mode: 'recall', limit: 5, embedMode: 'local', floor: cos - 0.01 });
+    assert.equal(below.length, 1);
   });
 
   test('semantic near-duplicate merges', async () => {
