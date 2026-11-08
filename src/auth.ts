@@ -35,13 +35,32 @@ export type RevokeResult = 'revoked' | 'ambiguous' | 'not_found';
 export function revokeKey(db: DB, idOrName: string): RevokeResult {
   const byId = db.prepare('update api_keys set revoked = 1 where id = ?').run(idOrName).changes;
   if (byId > 0) return 'revoked';
-  const named = db.prepare('select count(*) as n from api_keys where name = ? and revoked = 0').get(idOrName) as { n: number };
-  if (named.n > 1) return 'ambiguous';
-  if (named.n === 1) {
-    db.prepare('update api_keys set revoked = 1 where name = ? and revoked = 0').run(idOrName);
-    return 'revoked';
+  // Name fallback must be atomic: a separate count-then-update lets a concurrent
+  // insert of a same-named key slip between the two statements and get revoked
+  // too. The guarded single statement revokes only when exactly one live key
+  // has the name at update time; otherwise it changes 0 rows.
+  db.exec('begin immediate');
+  try {
+    const named = db.prepare('select count(*) as n from api_keys where name = ? and revoked = 0').get(idOrName) as { n: number };
+    if (named.n !== 1) {
+      db.exec('commit');
+      return named.n > 1 ? 'ambiguous' : 'not_found';
+    }
+    const res = db
+      .prepare(
+        `update api_keys set revoked = 1 where id = (
+           select id from api_keys where name = ? and revoked = 0 group by name having count(*) = 1
+         )`,
+      )
+      .run(idOrName);
+    db.exec('commit');
+    // 0 changes means a concurrent writer added a same-named key after our count;
+    // refuse rather than risk revoking more than one key.
+    return res.changes > 0 ? 'revoked' : 'ambiguous';
+  } catch (err) {
+    db.exec('rollback');
+    throw err;
   }
-  return 'not_found';
 }
 
 function safeEq(a: string, b: string): boolean {
