@@ -495,7 +495,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         const r = auth.createKey(db, name, scopes, str(a.flags, 'tenant') || 'default');
         return console.log(`created ${r.id} (${name}, scopes ${str(a.flags, 'scopes') || 'read,write'}, tenant ${str(a.flags, 'tenant') || 'default'})\n${r.key}\nShown once. Use it as: Authorization: Bearer <key>`);
       }
-      if (sub === 'revoke') return console.log(auth.revokeKey(db, a._[2]) ? `revoked ${a._[2]}` : 'no such key');
+      if (sub === 'revoke') {
+        const r = auth.revokeKey(db, a._[2]);
+        return console.log(r === 'revoked' ? `revoked ${a._[2]}` : r === 'ambiguous' ? `multiple live keys named ${a._[2]}; revoke by id (engram keys list)` : 'no such key');
+      }
       for (const k of auth.listKeys(db)) console.log(`${k.id}  ${k.name}  scopes=${k.scopes}  tenant=${k.tenant}  ${k.revoked ? 'REVOKED' : 'active'}  last used ${k.last_used || 'never'}`);
       return;
     }

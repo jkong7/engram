@@ -221,7 +221,11 @@ export function createHttpHandler(rootDb: DB) {
         return send(res, 201, createKey(rootDb, String(b.name || 'key'), (b.scopes || ['read']) as Scope[], b.tenant || 'default'));
       }
       const keyDel = path.match(/^\/v1\/keys\/([^/]+)$/);
-      if (keyDel && req.method === 'DELETE') return send(res, 200, { revoked: revokeKey(rootDb, keyDel[1]) });
+      if (keyDel && req.method === 'DELETE') {
+        const r = revokeKey(rootDb, keyDel[1]);
+        if (r === 'ambiguous') return send(res, 409, { error: 'multiple live keys share that name; revoke by id' });
+        return send(res, 200, { revoked: r === 'revoked' });
+      }
       const hook = path.match(/^\/v1\/hooks\/([^/]+)\/([^/]+)$/);
       if (hook && req.method === 'POST') {
         const t0 = performance.now();
