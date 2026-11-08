@@ -30,8 +30,18 @@ export function listKeys(db: DB) {
   return db.prepare('select id, name, scopes, tenant, created_at, last_used, revoked from api_keys order by created_at').all() as Record<string, unknown>[];
 }
 
-export function revokeKey(db: DB, id: string): boolean {
-  return Number(db.prepare('update api_keys set revoked = 1 where id = ? or name = ?').run(id, id).changes) > 0;
+export type RevokeResult = 'revoked' | 'ambiguous' | 'not_found';
+
+export function revokeKey(db: DB, idOrName: string): RevokeResult {
+  const byId = db.prepare('update api_keys set revoked = 1 where id = ?').run(idOrName).changes;
+  if (byId > 0) return 'revoked';
+  const named = db.prepare('select count(*) as n from api_keys where name = ? and revoked = 0').get(idOrName) as { n: number };
+  if (named.n > 1) return 'ambiguous';
+  if (named.n === 1) {
+    db.prepare('update api_keys set revoked = 1 where name = ? and revoked = 0').run(idOrName);
+    return 'revoked';
+  }
+  return 'not_found';
 }
 
 function safeEq(a: string, b: string): boolean {
