@@ -8,6 +8,13 @@ import { buildDigest, buildRecall } from '../src/digest.ts';
 import { redactSecrets, scanInjection } from '../src/safety.ts';
 import { inferScope } from '../src/maintain.ts';
 import type { DB } from '../src/db.ts';
+import { getEmbedder } from '../src/embed.ts';
+
+// Optional local-embeddings dependency may be absent in CI; skip rather than fail.
+async function embedderAvailableForTests(): Promise<boolean> {
+  return (await getEmbedder()) !== null;
+}
+
 
 describe('store without embeddings', () => {
   let h: ReturnType<typeof freshHome>;
@@ -175,7 +182,7 @@ describe('safety', () => {
   });
 });
 
-describe('store with local embeddings', () => {
+describe('store with local embeddings', { skip: !(await embedderAvailableForTests()) }, () => {
   let h: ReturnType<typeof freshHome>;
   let db: DB;
   before(() => {
