@@ -3,6 +3,14 @@ import { withTimeout } from './util.ts';
 
 type Extractor = (texts: string[], opts: Record<string, unknown>) => Promise<{ tolist(): number[][] }>;
 
+// The surface of the optional '@huggingface/transformers' dependency this file
+// uses. Typed locally so typecheck is deterministic whether or not the optional
+// package is installed.
+type TransformersModule = {
+  env: { cacheDir: string; allowRemoteModels: boolean };
+  pipeline: (task: string, model: string, opts: Record<string, unknown>) => Promise<unknown>;
+};
+
 let extractor: Extractor | null = null;
 let loading: Promise<Extractor | null> | null = null;
 let failed = false;
@@ -19,7 +27,11 @@ async function load(): Promise<Extractor | null> {
   const cfg = loadConfig();
   if (!cfg.embed.enabled || failed) return null;
   try {
-    const mod = await import('@huggingface/transformers');
+    // Optional dependency: it may be absent (npm ci skips failed optional
+    // installs), so the specifier must not be statically resolvable by tsc.
+    // The used surface is typed explicitly below.
+    const name = '@huggingface/transformers';
+    const mod = (await import(name)) as TransformersModule;
     mod.env.cacheDir = paths().models;
     mod.env.allowRemoteModels = process.env.ENGRAM_OFFLINE !== '1';
     const pipe = await mod.pipeline('feature-extraction', cfg.embed.model, { dtype: 'q8' });
